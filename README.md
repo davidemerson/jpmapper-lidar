@@ -60,9 +60,17 @@ python3 jpmapper-rasterize.py \
 * `--no-merge` = doesn't merge the .tif tiles into one, just keeps them tiled
 
 ### requirements
-You'll need python3.x and tqdm, so `pip install tqdm`
+I've been using CentOS 9 because PDAL has good RPM builds there, and I didn't feel like building from source.
 
-You'll also want to install pdal and gdal-bin, in debian: `sudo apt install pdal gdal-bin`
+You'll need some packages from epel and the standard repo, in CentOS:
+* `yum install epel-release`
+* `yum install python3 python3-pip python3-devel gcc geos proj proj-devel`
+* `yum install --enablerepo=epel PDAL`
+
+On the Python side, you'll need some from pip too:
+* `pip3 install rasterio pyproj geopy numpy matplotlib tqdm`
+
+The application will let you know if it doesn't see some requirements at runtime.
 
 ### getting your lidar data
 For NYC (this was developed for use in NYC),

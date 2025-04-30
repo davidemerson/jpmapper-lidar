@@ -1,158 +1,159 @@
-#!/usr/bin/env python3
-import os
-import sys
-import json
-import shutil
-import subprocess
 import argparse
-from multiprocessing import Pool, cpu_count
+import os
+import glob
+import json
 from pathlib import Path
+import numpy as np
+import rasterio
+from rasterio.merge import merge
+from pyproj import Transformer
+from geopy.geocoders import Nominatim
+from geopy.distance import geodesic
+import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-def check_dependencies():
-    print("[CHECK] Verifying environment dependencies...")
 
-    # Check external commands
-    for cmd in ["pdal", "gdal_merge.py"]:
-        if shutil.which(cmd) is None:
-            print(f"❌ Missing command: '{cmd}'")
-            print(f"   Please install it via your system package manager.")
-            print(f"   Example (Ubuntu): sudo apt install pdal gdal-bin")
-            sys.exit(1)
+def geocode(address):
+    geolocator = Nominatim(user_agent="jpmapper")
+    location = geolocator.geocode(address)
+    if not location:
+        raise ValueError(f"Address not found: {address}")
+    return location.latitude, location.longitude
 
-    # Check Python modules
+
+def resolve_coords(loc):
+    if os.path.isfile(loc):
+        raise ValueError("File input not supported for coordinates. Use direct values or addresses.")
     try:
-        import tqdm  # noqa
-    except ImportError:
-        print("❌ Missing Python module: 'tqdm'")
-        print("   Install with: pip install tqdm")
-        sys.exit(1)
+        lat, lon = map(float, loc.split(","))
+        return lat, lon
+    except:
+        return geocode(loc)
 
-    print("✅ All dependencies are satisfied.\n")
 
-def check_cpu_advice(workers_requested):
-    total_cores = os.cpu_count()
-    if total_cores is None:
-        return
-
-    print(f"[INFO] Detected {total_cores} CPU cores available.")
-    if workers_requested < total_cores:
-        print(f"⚠️  You are using {workers_requested} workers, but {total_cores} cores are available.")
-        print(f"💡 Consider increasing --workers to {total_cores} for full CPU utilization.\n")
+def load_dsm_dataset(dsm_path):
+    if os.path.isdir(dsm_path):
+        tifs = sorted(glob.glob(os.path.join(dsm_path, "*.tif")))
+        if not tifs:
+            raise FileNotFoundError(f"No .tif files found in {dsm_path}")
+        srcs = [rasterio.open(fp) for fp in tifs]
+        mosaic, out_trans = merge(srcs)
+        out_meta = srcs[0].meta.copy()
+        out_meta.update({"height": mosaic.shape[1], "width": mosaic.shape[2], "transform": out_trans})
+        return mosaic[0], out_meta
+    elif os.path.isfile(dsm_path):
+        with rasterio.open(dsm_path) as src:
+            return src.read(1), src.meta
     else:
-        print("✅ Worker count matches or exceeds available cores.\n")
+        raise FileNotFoundError(f"DSM input path invalid: {dsm_path}")
 
-def build_pipeline(input_path, output_path, resolution=1.0):
-    return [
-        {
-            "type": "readers.las",
-            "filename": str(input_path)
-        },
-        {
-            "type": "writers.gdal",
-            "filename": str(output_path),
-            "output_type": "max",
-            "resolution": resolution,
-            "data_type": "float",
-            "gdaldriver": "GTiff",
-            "compression": "lzw"
-        }
-    ]
 
-def rasterize_file(args_tuple):
-    laz_path, output_dir, resolution, force = args_tuple
-    laz_path = Path(laz_path)
-    output_name = laz_path.stem + "_dsm.tif"
-    output_path = Path(output_dir) / output_name
+def interpolate_coords(p1, p2, steps):
+    return np.linspace(p1, p2, steps)
 
-    print(f"[START] Processing {laz_path.name}")
-    if output_path.exists() and not force:
-        print(f"[SKIP] {output_path.name} exists.")
-        return str(output_path)
 
-    pipeline = build_pipeline(laz_path, output_path, resolution)
-    pipeline_path = output_path.with_suffix(".json")
+def extract_elevation(latlons, dsm_array, dsm_meta):
+    elevations = []
+    transformer = Transformer.from_crs("EPSG:4326", dsm_meta["crs"], always_xy=True)
+    transform = dsm_meta["transform"]
 
-    with open(pipeline_path, 'w') as f:
-        json.dump(pipeline, f)
+    for lat, lon in tqdm(latlons, desc="Extracting elevation", unit="pt"):
+        x, y = transformer.transform(lon, lat)
+        col, row = ~transform * (x, y)
+        row, col = int(row), int(col)
+        if 0 <= row < dsm_array.shape[0] and 0 <= col < dsm_array.shape[1]:
+            elevations.append(dsm_array[row, col])
+        else:
+            elevations.append(np.nan)
+    return np.array(elevations)
 
-    try:
-        subprocess.run(
-            ["pdal", "pipeline", str(pipeline_path)],
-            capture_output=True, text=True, check=True
-        )
-        print(f"[DONE] {output_path.name}")
-        return str(output_path)
-    except subprocess.CalledProcessError as e:
-        print(f"[FAIL] {laz_path.name}:\n{e.stderr}")
-        return None
-    finally:
-        pipeline_path.unlink(missing_ok=True)
 
-def merge_tiles(tile_paths, merged_output_path):
-    print(f"\n[MOSAIC] Merging {len(tile_paths)} tiles into {merged_output_path.name}")
-    try:
-        subprocess.run(
-            ["gdal_merge.py", "-o", str(merged_output_path), "-of", "GTiff"] + tile_paths,
-            check=True
-        )
-        print(f"[SUCCESS] Merged DSM written to {merged_output_path}")
-    except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Merging failed:\n{e.stderr}")
+def fresnel_radius(d1, d2, freq_mhz):
+    c = 3e8  # speed of light m/s
+    wavelength = c / (freq_mhz * 1e6)
+    return np.sqrt(wavelength * d1 * d2 / (d1 + d2))
 
-def cleanup_files(file_paths, label):
-    print(f"[CLEANUP] Deleting {len(file_paths)} {label} files...")
-    for path in file_paths:
-        try:
-            Path(path).unlink()
-        except Exception as e:
-            print(f"[WARN] Failed to delete {path}: {e}")
+
+def plot_profile(dists, elevations, fresnel_curve):
+    plt.figure(figsize=(10, 4))
+    plt.plot(dists, elevations, label="Elevation (m)")
+    plt.plot(dists, fresnel_curve + np.minimum(elevations[0], elevations[-1]), 'r--', label="1st Fresnel Zone")
+    plt.title("Terrain and Fresnel Zone Profile")
+    plt.xlabel("Distance (m)")
+    plt.ylabel("Elevation (m)")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+def analyze_obstructions(coords, dists, elevations, fresnel, start_elev, end_elev):
+    obstructed = []
+    clearance_line = np.linspace(start_elev, end_elev, len(elevations))
+    for i, (latlon, d, elev, fr, line) in enumerate(tqdm(zip(coords, dists, elevations, fresnel, clearance_line),
+                                                        total=len(coords), desc="Analyzing obstructions", unit="pt")):
+        clearance = elev - (line + fr)
+        if clearance > 0:
+            obstructed.append({
+                "index": i,
+                "lat": float(latlon[0]),
+                "lon": float(latlon[1]),
+                "distance_m": float(d),
+                "elevation_m": float(elev),
+                "fresnel_radius_m": float(fr),
+                "fresnel_clearance_m": float(clearance)
+            })
+    return obstructed
+
 
 def main():
-    check_dependencies()
-
-    parser = argparse.ArgumentParser(description="Rasterize a folder of LIDAR files into a unified DSM GeoTIFF.")
-    parser.add_argument("--lasdir", required=True, help="Input directory of .las/.laz files")
-    parser.add_argument("--outdir", required=True, help="Directory to write individual DSMs and merged DSM")
-    parser.add_argument("--resolution", type=float, default=1.0, help="Raster resolution in meters")
-    parser.add_argument("--force", action="store_true", help="Overwrite existing raster tiles")
-    parser.add_argument("--workers", type=int, default=cpu_count(), help="Number of parallel processes")
-    parser.add_argument("--merged", default="merged_dsm.tif", help="Filename for merged DSM GeoTIFF")
-    parser.add_argument("--cleanup-tiles", action="store_true", help="Delete DSM tile .tif files after merge")
-    parser.add_argument("--cleanup-lidar", action="store_true", help="Delete input .las/.laz files after rasterizing")
-    parser.add_argument("--no-merge", action="store_true", help="Do not merge DSM tiles into a unified raster")
+    parser = argparse.ArgumentParser(description="Line-of-sight terrain & Fresnel zone analyzer")
+    parser.add_argument("--p1", required=True, help="Point 1 (lat,lon or address)")
+    parser.add_argument("--p2", required=True, help="Point 2 (lat,lon or address)")
+    parser.add_argument("--freq", required=True, type=float, help="Frequency in MHz")
+    parser.add_argument("--dsm", required=True, help="Path to DSM GeoTIFF or folder of tiles")
+    parser.add_argument("--steps", type=int, default=100, help="Number of interpolation points")
+    parser.add_argument("--json", type=str, help="Optional JSON output path for obstruction report")
 
     args = parser.parse_args()
 
-    check_cpu_advice(args.workers)
+    latlon1 = resolve_coords(args.p1)
+    latlon2 = resolve_coords(args.p2)
 
-    input_dir = Path(args.lasdir)
-    output_dir = Path(args.outdir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    merged_output_path = output_dir / args.merged
+    coords = interpolate_coords(np.array(latlon1), np.array(latlon2), args.steps)
+    dsm_array, dsm_meta = load_dsm_dataset(args.dsm)
+    elevations = extract_elevation(coords, dsm_array, dsm_meta)
 
-    laz_files = sorted([f for f in input_dir.glob("*.laz")] + [f for f in input_dir.glob("*.las")])
-    print(f"🔍 Found {len(laz_files)} LIDAR files. Rasterizing with {args.workers} workers...")
+    dists = np.array([geodesic(latlon1, tuple(p)).meters for p in tqdm(coords, desc="Computing distances", unit="pt")])
+    total_distance = dists[-1]
 
-    task_args = [(str(f), output_dir, args.resolution, args.force) for f in laz_files]
+    fresnel = np.array([fresnel_radius(d, total_distance - d, args.freq) for d in tqdm(dists, desc="Computing Fresnel zone", unit="pt")])
 
-    with Pool(args.workers) as pool:
-        results = list(tqdm(pool.imap_unordered(rasterize_file, task_args), total=len(task_args)))
+    print(f"\nTotal path distance: {total_distance:.2f} m")
+    print(f"Max Fresnel radius: {np.max(fresnel):.2f} m")
 
-    valid_tiles = [r for r in results if r is not None and Path(r).exists()]
-    print(f"\n✅ Rasterization complete. {len(valid_tiles)} tiles ready.")
+    obstructed = analyze_obstructions(coords, dists, elevations, fresnel, elevations[0], elevations[-1])
 
-    if valid_tiles and not args.no_merge:
-        merge_tiles(valid_tiles, merged_output_path)
-        if args.cleanup_tiles:
-            cleanup_files(valid_tiles, "tile DSM")
-    elif args.no_merge:
-        print("ℹ️ Skipping merge step (user set --no-merge).")
-    else:
-        print("⚠️ No valid tiles to merge. Skipping DSM merge.")
+    print(f"\nNumber of obstructed points: {len(obstructed)}")
+    if obstructed:
+        print("\nObstructed Points:")
+        for o in obstructed:
+            print(f"  {o['distance_m']:.1f} m | {o['lat']:.5f}, {o['lon']:.5f} | Elev: {o['elevation_m']:.2f} m | Clearance: {o['fresnel_clearance_m']:.2f} m")
 
-    if args.cleanup_lidar:
-        cleanup_files([str(f) for f in laz_files], "LIDAR")
+    if args.json:
+        output_data = {
+            "start_point": {"lat": latlon1[0], "lon": latlon1[1]},
+            "end_point": {"lat": latlon2[0], "lon": latlon2[1]},
+            "frequency_mhz": args.freq,
+            "total_distance_m": total_distance,
+            "obstructions": obstructed
+        }
+        with open(args.json, 'w') as f:
+            json.dump(output_data, f, indent=2)
+        print(f"\nObstruction data exported to: {args.json}")
+
+    plot_profile(dists, elevations, fresnel)
+
 
 if __name__ == "__main__":
     main()
