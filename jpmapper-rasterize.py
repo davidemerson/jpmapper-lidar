@@ -12,14 +12,12 @@ from tqdm import tqdm
 def check_dependencies():
     print("[CHECK] Verifying environment dependencies...")
 
-    # External command: pdal only (gdal_merge removed)
     if shutil.which("pdal") is None:
         print("❌ Missing command: 'pdal'")
         print("   Please install it via your system package manager.")
         print("   Example (Ubuntu): sudo apt install pdal")
         sys.exit(1)
 
-    # Python modules
     try:
         import tqdm, rasterio  # noqa
         from rasterio.merge import merge  # noqa
@@ -54,8 +52,7 @@ def build_pipeline(input_path, output_path, resolution=1.0):
             "output_type": "max",
             "resolution": resolution,
             "data_type": "float",
-            "gdaldriver": "GTiff",
-            "compression": "lzw"
+            "gdaldriver": "GTiff"
         }
     ]
 
