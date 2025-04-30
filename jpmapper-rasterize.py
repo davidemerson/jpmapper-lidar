@@ -91,10 +91,30 @@ def merge_tiles_rasterio(tile_paths, merged_output_path):
     import rasterio
     from rasterio.merge import merge
 
-    srcs = [rasterio.open(p) for p in tile_paths]
-    mosaic, transform = merge(srcs)
+    crs_map = {}
+    datasets = []
 
-    meta = srcs[0].meta.copy()
+    for path in tile_paths:
+        ds = rasterio.open(path)
+        datasets.append(ds)
+        crs = ds.crs.to_string()
+        crs_map.setdefault(crs, []).append(path)
+
+    if len(crs_map) > 1:
+        print("❌ CRS mismatch detected among input tiles.")
+        print("Each input DSM .tif file must use the same Coordinate Reference System.")
+        print("The following CRS groups were found:")
+        for crs, files in crs_map.items():
+            print(f"  - CRS: {crs}")
+            for f in files:
+                print(f"    • {f}")
+        print("\n💡 To fix: split files by CRS and process each batch separately.")
+        sys.exit(1)
+
+    # All CRS match — proceed with merge
+    mosaic, transform = merge(datasets)
+
+    meta = datasets[0].meta.copy()
     meta.update({
         "height": mosaic.shape[1],
         "width": mosaic.shape[2],
