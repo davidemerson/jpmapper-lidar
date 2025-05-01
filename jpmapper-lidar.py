@@ -141,6 +141,9 @@ def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, num_
             continue
 
         terrain = dsm[row, col]
+        if terrain < -1000:  # treat as invalid nodata value
+            skipped += 1
+            continue
         if uses_feet:
             terrain *= 0.3048
 
@@ -168,7 +171,8 @@ def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, num_
         midpoint_lat = (lat1 + lat2) / 2
         midpoint_lon = (lon1 + lon2) / 2
         print(f"Midpoint of path: lat {midpoint_lat:.6f}, lon {midpoint_lon:.6f}")
-        raise ValueError("No valid samples within DSM extent.")
+        print("Analysis failed: No valid samples were found within the DSM coverage. Please verify your input coordinates.")
+        return
 
     print("=== Link Summary ===")
     print(f"Total distance: {total_distance:.2f} meters")
