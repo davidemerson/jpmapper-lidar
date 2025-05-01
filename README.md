@@ -91,7 +91,8 @@ For NYC (this was developed for use in NYC),
 ### getting your DSM data
 See above, this is why we have a preprocessor - you want to run your .las files through `jpmapper-rasterize.py` to create a GeoTIFF DSM of your area.
 
-### usage example
+### usage examples
+The kitchen sink
 ```
 python3 jpmapper-lidar.py \
   --point-a "144 Spencer St, Brooklyn, NY" \
@@ -101,6 +102,14 @@ python3 jpmapper-lidar.py \
   --dsm /mnt/your-geotiff-dsm.tif \
   --frequency-ghz 5.8
 ```
+Just a couple points
+```
+python3 jpmapper-lidar.py \
+  --point-a 40.792814,-73.945616 \
+  --point-b 40.796872,-73.948744 \
+  --freq 60 \
+  --dsm geodata/merged_dsm.tif
+```
 
 ### options
 `--point-a` = Start point (lat,lon or address), required
@@ -109,15 +118,3 @@ python3 jpmapper-lidar.py \
 `--frequency-ghz` = Transmission frequency in GHz, required
 `--override-a` = Override elevation at point A (meters), use this optionally if you have an antenna, or if the data doesn't properly represent the point elevation for some reason.
 `--override-b` = Override elevation at point B (meters), use this optionally if you have an antenna, or if the data doesn't properly represent the point elevation for some reason.
-
-(((In Progress, don't think too hard about this section yet, it's carryover from `jpmapper-osm`)))
-
-Usage Examples:
-  `./jpmapper -addr1 "Empire State Building, NYC" -addr2 "One World Trade Center, NYC" -freq 5800`
-  `./jpmapper -lat1 40.7484 -lon1 -73.9857 -lat2 40.7127 -lon2 -74.0134 -freq 2400 -debug`
-  `./jpmapper -addr1 "144 Spencer St, Brooklyn, NY" -addr2 "303 Vernon Ave, Brooklyn, NY" -freq 5800`
-
-Notes:
-        * addresses and place names will be resolved to lat/lon
-        * freq is in MHz
-        * debug shows obstruction work so you can troubleshoot buildings
