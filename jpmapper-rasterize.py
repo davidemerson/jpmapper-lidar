@@ -207,7 +207,7 @@ def main():
     merged_path = odir / args.merged
     csv_path = odir / "dsm_tile_index.csv"
 
-    files = sorted(idir.glob("*.las") + idir.glob("*.laz"))
+    files = sorted(list(idir.glob("*.las")) + list(idir.glob("*.laz")))
     print(f"🔍 Found {len(files)} LIDAR files. Rasterizing...")
 
     with open(csv_path, "w", newline="") as f:
