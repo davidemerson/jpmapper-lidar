@@ -138,6 +138,11 @@ def print_sample_latlon_points(tif_path):
         rows, cols = band.shape
         debug(f"Scanning raster of size {rows}x{cols}")
 
+        # Detect if CRS uses US survey feet (ftUS)
+        unit_name = src.crs.linear_units.lower() if src.crs else ""
+        to_meters = 0.3048006096012192 if "foot" in unit_name else 1.0
+        debug(f"Detected vertical unit: {unit_name} (scale: {to_meters})")
+
         valid = []
         attempts = 0
         max_attempts = 100000
@@ -157,8 +162,9 @@ def print_sample_latlon_points(tif_path):
         for row, col in valid:
             x, y = src.transform * (col, row)
             lon, lat = transform(src.crs, "EPSG:4326", [x], [y])
-            z = band[row, col]
-            print(f"   {lat[0]:.6f}, {lon[0]:.6f}, Elevation: {z:.2f} m")
+            z_raw = band[row, col]
+            z_meters = z_raw * to_meters
+            print(f"   {lat[0]:.6f}, {lon[0]:.6f}, Elevation: {z_meters:.2f} m")
 
 def rasterize_file(args_tuple):
     laz_path, output_dir, resolution, force, csv_path, epsg = args_tuple
