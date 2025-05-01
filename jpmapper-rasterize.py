@@ -97,19 +97,60 @@ def build_pipeline(input_path, output_path, resolution=1.0, epsg=None):
 
 def log_raster_extent(tif_path, csv_path):
     import rasterio
+    from rasterio.warp import transform_bounds
+
     with rasterio.open(tif_path) as src:
         bounds = src.bounds
-        crs = src.crs.to_string() if src.crs else "None"
+        crs = src.crs
         zmin, zmax = src.read(1).min(), src.read(1).max()
+
+        # Convert bounding box to EPSG:4326 if needed
+        if crs and crs.to_epsg() != 4326:
+            gps_bounds = transform_bounds(crs, "EPSG:4326", *bounds)
+        else:
+            gps_bounds = bounds  # Already in EPSG:4326
+
+        lon_min, lat_min, lon_max, lat_max = gps_bounds
+        crs_str = crs.to_string() if crs else "None"
+
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
                 Path(tif_path).name,
-                crs,
-                bounds.left, bounds.bottom, bounds.right, bounds.top,
+                crs_str,
+                lat_min, lon_min, lat_max, lon_max,
                 src.res[0], src.res[1],
                 float(zmin), float(zmax)
             ])
+
+def print_sample_latlon_points(tif_path):
+    import rasterio
+    import random
+    from rasterio.warp import transform
+
+    with rasterio.open(tif_path) as src:
+        band = src.read(1)
+        rows, cols = band.shape
+        valid_coords = [
+            (row, col) for row in range(rows) for col in range(cols)
+            if not rasterio.enums.MaskFlags.all(band[row, col] == src.nodata)
+        ]
+
+        if len(valid_coords) < 2:
+            print("⚠️ Not enough valid data points to sample from.")
+            return
+
+        samples = random.sample(valid_coords, 2)
+        lats_lons = []
+
+        for row, col in samples:
+            x, y = src.transform * (col, row)
+            lon, lat = transform(src.crs, "EPSG:4326", [x], [y])
+            lats_lons.append((lat[0], lon[0]))
+
+        print("\n🧪 Here's a couple points from the raster tiles for testing:")
+        for lat, lon in lats_lons:
+            print(f"   {lat:.6f}, {lon:.6f}")
 
 def rasterize_file(args_tuple):
     laz_path, output_dir, resolution, force, log_csv_path, epsg = args_tuple
