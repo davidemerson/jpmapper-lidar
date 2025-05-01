@@ -97,6 +97,16 @@ def merge_tiles_rasterio(tile_paths, merged_output_path):
     for path in tile_paths:
         ds = rasterio.open(path)
         datasets.append(ds)
+
+        if ds.crs is None:
+            print(f"❌ Missing CRS in file: {path}")
+            print("Each input DSM .tif file must define a Coordinate Reference System (CRS).")
+            print("💡 To fix:")
+            print("   - Ensure your .las/.laz files include CRS metadata, OR")
+            print("   - Use PDAL 'filters.assign' to assign a CRS during rasterization.")
+            print("   - Example: 'assignment=\"spatialreference=EPSG:32611\"'")
+            sys.exit(1)
+
         crs = ds.crs.to_string()
         crs_map.setdefault(crs, []).append(path)
 
@@ -111,7 +121,6 @@ def merge_tiles_rasterio(tile_paths, merged_output_path):
         print("\n💡 To fix: split files by CRS and process each batch separately.")
         sys.exit(1)
 
-    # All CRS match — proceed with merge
     mosaic, transform = merge(datasets)
 
     meta = datasets[0].meta.copy()
