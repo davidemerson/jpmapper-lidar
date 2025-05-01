@@ -130,10 +130,15 @@ def print_sample_latlon_points(tif_path):
 
     with rasterio.open(tif_path) as src:
         band = src.read(1)
+        nodata = src.nodata
         rows, cols = band.shape
+
+        # Find all non-nodata pixels
         valid_coords = [
-            (row, col) for row in range(rows) for col in range(cols)
-            if not rasterio.enums.MaskFlags.all(band[row, col] == src.nodata)
+            (row, col)
+            for row in range(rows)
+            for col in range(cols)
+            if nodata is None or band[row, col] != nodata
         ]
 
         if len(valid_coords) < 2:
