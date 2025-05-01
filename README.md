@@ -91,8 +91,9 @@ For NYC (this was developed for use in NYC),
 ### getting your DSM data
 See above, this is why we have a preprocessor - you want to run your .las files through `jpmapper-rasterize.py` to create a GeoTIFF DSM of your area.
 
-### usage examples
-The kitchen sink
+### cli usage examples
+
+The kitchen sink:
 ```
 python3 jpmapper-lidar.py \
   --point-a "144 Spencer St, Brooklyn, NY" \
@@ -102,13 +103,55 @@ python3 jpmapper-lidar.py \
   --dsm /mnt/your-geotiff-dsm.tif \
   --frequency-ghz 5.8
 ```
-Just a couple points
+
+Just a couple points:
 ```
 python3 jpmapper-lidar.py \
   --point-a 40.792814,-73.945616 \
   --point-b 40.796872,-73.948744 \
   --freq 60 \
   --dsm geodata/merged_dsm.tif
+```
+
+### csv usage examples
+format your csv like this:
+| point_a_lat | point_a_lon | point_b_lat | point_b_lon | frequency_ghz | override_a | override_b |
+|-------------|-------------|-------------|-------------|----------------|------------|------------|
+| 40.79       | -73.94      | 40.80       | -73.95      | 5.8            | (optional) | (optional) |
+
+and invoke the program like this:
+```
+python3 jpmapper-lidar.py --dsm geodata/merged_dsm.tif \
+  --csv-input pairs.csv \
+  --csv-output results.csv
+```
+
+### output examples
+
+A normal looking run:
+```
+[david@blazes-boylan]# python3 jpmapper-lidar.py --point-a 40.792814,-73.945616 --point-b 40.796872,-73.948744 --freq 5.8 --dsm geodata/merged_dsm.tif
+Coordinate (40.792814, -73.945616) maps to pixel (row=8750, col=3618) with elevation 41.83 meters
+Coordinate (40.796872, -73.948744) maps to pixel (row=5794, col=1884) with elevation 17.71 meters
+=== Link Summary ===
+Total distance: 522.27 meters
+Point A elevation: 41.83 m
+Point B elevation: 17.71 m
+Frequency: 5.800 GHz (5800000000 Hz)
+First Fresnel zone radius (midpoint): 2.60 meters
+Obstruction analysis: 107 obstructed, 4 partial, 82 clear, 7 skipped
+Verdict: Obstructed
+```
+
+When you specify points out of bounds from your DSM, or have a path which runs out of bounds:
+```
+[david@blazes-boylan]# python3 jpmapper-lidar.py --point-a "144 Spencer St, Brooklyn, NY" --point-b "303 Vernon Ave, Brooklyn, NY" --dsm geodata/merged_dsm.tif --frequency-ghz 5.8
+Coordinate (40.694180, -73.955217) maps to pixel (row=10000, col=0) with elevation -9999.00 meters
+Coordinate (40.695935, -73.939720) maps to pixel (row=10000, col=5000) with elevation 27.01 meters
+ERROR: All path samples were outside the DSM raster bounds.
+DSM covers approximately: lat 40.804826 to 40.791097, lon -73.952141 to -73.943120
+Midpoint of path: lat 40.695058, lon -73.947468
+Analysis failed: No valid samples were found within the DSM coverage. Please verify your input coordinates.
 ```
 
 ### options

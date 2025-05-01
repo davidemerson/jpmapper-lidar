@@ -108,7 +108,7 @@ def fresnel_radius(d, f_hz):
 
 
 
-def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, num_samples=200):
+def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, num_samples=200, summarize_only=False):
     from geopy.distance import geodesic
 
     # Calculate LOS line and Fresnel zone radius
@@ -197,9 +197,62 @@ def main():
     parser.add_argument("--frequency-ghz", type=float, required=True, help="Transmission frequency in GHz")
     parser.add_argument("--override-a", type=float, help="Override elevation at point A (meters)")
     parser.add_argument("--override-b", type=float, help="Override elevation at point B (meters)")
+    
+    parser.add_argument("--csv-input", type=str, help="Optional CSV file containing batch point-pairs and options")
+    parser.add_argument("--csv-output", type=str, help="Optional path to write results if using --csv-input")
+
     args = parser.parse_args()
 
     dsm, meta = load_dsm_dataset(args.dsm)
+
+    if args.csv_input:
+        import pandas as pd
+
+        df = pd.read_csv(args.csv_input)
+        results = []
+
+        for i, row in df.iterrows():
+            try:
+                lat1, lon1 = resolve_coords(f"{row['point_a_lat']},{row['point_a_lon']}")
+                lat2, lon2 = resolve_coords(f"{row['point_b_lat']},{row['point_b_lon']}")
+                elev1 = row['override_a'] if not pd.isna(row['override_a']) else get_elevation_from_dsm(lat1, lon1, dsm, meta)
+                elev2 = row['override_b'] if not pd.isna(row['override_b']) else get_elevation_from_dsm(lat2, lon2, dsm, meta)
+                freq_ghz = row['frequency_ghz']
+
+                print(f"Analyzing row {i}...")
+                verdict, obstructed, partial, clear, skipped, dist, fresnel = analyze_path(
+                    lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, summarize_only=True)
+
+                results.append({
+                    "index": i,
+                    "point_a_lat": lat1,
+                    "point_a_lon": lon1,
+                    "point_b_lat": lat2,
+                    "point_b_lon": lon2,
+                    "elev1": elev1,
+                    "elev2": elev2,
+                    "frequency_ghz": freq_ghz,
+                    "distance_m": dist,
+                    "fresnel_radius_m": fresnel,
+                    "obstructed": obstructed,
+                    "partial": partial,
+                    "clear": clear,
+                    "skipped": skipped,
+                    "verdict": verdict
+                })
+
+            except Exception as e:
+                print(f"Row {i} failed: {e}")
+                results.append({"index": i, "verdict": "error", "error": str(e)})
+
+        out_df = pd.DataFrame(results)
+        if args.csv_output:
+            out_df.to_csv(args.csv_output, index=False)
+            print(f"Results written to {args.csv_output}")
+        else:
+            print(out_df)
+        return
+
     lat1, lon1 = resolve_coords(args.point_a)
     lat2, lon2 = resolve_coords(args.point_b)
 
