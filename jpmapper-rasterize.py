@@ -14,6 +14,13 @@ from tqdm import tqdm
 import rasterio
 from rasterio.warp import transform_bounds, transform
 from rasterio.merge import merge
+from rasterio.crs import CRS
+
+DEBUG = False
+
+def debug(msg):
+    if DEBUG:
+        print(f"[DEBUG] {msg}")
 
 def check_dependencies():
     print("[CHECK] Verifying environment dependencies...")
@@ -38,8 +45,10 @@ def get_epsg_code(las_path):
         result = subprocess.run(["pdal", "info", "--metadata", str(las_path)], capture_output=True, text=True, check=True)
         meta = json.loads(result.stdout)
         epsg = meta["metadata"].get("srs", {}).get("epsg")
+        debug(f"EPSG from {las_path}: {epsg}")
         return epsg if isinstance(epsg, int) else None
-    except Exception:
+    except Exception as e:
+        debug(f"Failed to get EPSG for {las_path}: {e}")
         return None
 
 def prompt_for_epsg():
@@ -99,6 +108,7 @@ def build_pipeline(input_path, output_path, resolution=1.0, epsg=None):
         "data_type": "float",
         "gdaldriver": "GTiff"
     })
+    debug(f"PDAL pipeline for {input_path.name}: {json.dumps(pipeline, indent=2)}")
     return pipeline
 
 def log_raster_extent(tif_path, csv_path):
@@ -119,6 +129,7 @@ def log_raster_extent(tif_path, csv_path):
                 src.res[0], src.res[1],
                 float(zmin), float(zmax)
             ])
+    debug(f"Logged extents for {tif_path.name}")
 
 def print_sample_latlon_points(tif_path):
     with rasterio.open(tif_path) as src:
@@ -131,15 +142,16 @@ def print_sample_latlon_points(tif_path):
             print("⚠️ Not enough valid points.")
             return
         samples = random.sample(valid, 2)
+        print("\n🧪 Sample points from DSM tile:")
         for row, col in samples:
             x, y = src.transform * (col, row)
             lon, lat = transform(src.crs, "EPSG:4326", [x], [y])
-            print(f"🧪 Sample point: {lat[0]:.6f}, {lon[0]:.6f}")
+            print(f"   {lat[0]:.6f}, {lon[0]:.6f}")
 
 def rasterize_file(args_tuple):
     laz_path, output_dir, resolution, force, csv_path, epsg = args_tuple
     laz_path = Path(laz_path)
-    out_path = Path(output_dir) / (laz_path.stem + "_dsm.tif")
+    out_path = output_dir / (laz_path.stem + "_dsm.tif")
     if out_path.exists() and not force:
         print(f"[SKIP] {out_path.name} exists.")
         return str(out_path)
@@ -148,6 +160,7 @@ def rasterize_file(args_tuple):
     with open(jpath, 'w') as f:
         json.dump(pipeline, f)
     try:
+        debug(f"Running PDAL on {laz_path}")
         subprocess.run(["pdal", "pipeline", str(jpath)], check=True, capture_output=True, text=True)
         print(f"[DONE] {out_path.name}")
         log_raster_extent(out_path, csv_path)
@@ -159,6 +172,7 @@ def rasterize_file(args_tuple):
         jpath.unlink(missing_ok=True)
 
 def merge_tiles_rasterio(tile_paths, out_path):
+    debug(f"Merging tiles: {tile_paths}")
     datasets = []
     crs_map = {}
     fallback_crs = None
@@ -187,6 +201,7 @@ def cleanup_files(file_paths, label):
         except Exception as e: print(f"Failed: {p}: {e}")
 
 def main():
+    global DEBUG
     check_dependencies()
     parser = argparse.ArgumentParser()
     parser.add_argument("--lasdir", required=True)
@@ -198,9 +213,11 @@ def main():
     parser.add_argument("--cleanup-tiles", action="store_true")
     parser.add_argument("--cleanup-lidar", action="store_true")
     parser.add_argument("--no-merge", action="store_true")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose debug output")
     args = parser.parse_args()
-
+    DEBUG = args.debug
     check_cpu_advice(args.workers)
+
     idir = Path(args.lasdir)
     odir = Path(args.outdir)
     odir.mkdir(parents=True, exist_ok=True)

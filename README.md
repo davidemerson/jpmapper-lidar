@@ -44,7 +44,8 @@ python3 jpmapper-rasterize.py \
   --workers 32 \
   --force \
   --cleanup-tiles \
-  --cleanup-lidar
+  --cleanup-lidar \
+  --debug
 ```
 
 ### options
@@ -56,6 +57,7 @@ python3 jpmapper-rasterize.py \
 * `--cleanup-tiles` = deletes the .tif tiles after merging them into a single file
 * `--cleanup-lidar` = deletes the .las files after rasterizing them
 * `--no-merge` = doesn't merge the .tif tiles into one, just keeps them tiled
+* `--debug` = wtf is going on I need to see inside this thing
 
 ### requirements
 I've been using CentOS 9 because PDAL has good RPM builds there, and I didn't feel like building from source.
