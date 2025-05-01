@@ -81,8 +81,9 @@ def build_pipeline(input_path, output_path, resolution=1.0, epsg=None):
     ]
     if epsg:
         pipeline.append({
-            "type": "filters.assign",
-            "assignment": f"spatialreference=EPSG:{epsg}"
+            "type": "filters.reprojection",
+            "in_srs": f"EPSG:{epsg}",
+            "out_srs": f"EPSG:{epsg}"
         })
     pipeline.append({
         "type": "writers.gdal",
