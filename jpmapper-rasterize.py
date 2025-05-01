@@ -51,6 +51,27 @@ def get_epsg_code(las_path):
         print(f"[WARN] Failed to detect EPSG for {las_path}: {e}")
         return None
 
+def prompt_for_epsg():
+    print("Please choose a CRS to assign to files with missing EPSG:")
+    print("  1. WGS 84 (EPSG:4326)                   – GPS lat/lon")
+    print("  2. UTM Zone 11N (WGS84) (EPSG:32611)     – Western US")
+    print("  3. NAD83 / UTM Zone 15N (EPSG:26915)     – Central US")
+    print("  4. NAD83 / California Albers (EPSG:3310) – California")
+    print("  5. Web Mercator (EPSG:3857)              – Online maps")
+    print("  q. Quit")
+    choice = input("Enter 1–5 to apply EPSG to missing files, or q to quit: ").strip()
+    epsg_map = {
+        "1": 4326, "2": 32611, "3": 26915, "4": 3310, "5": 3857
+    }
+    if choice.lower() == "q" or choice == "":
+        print("Aborting. Please re-run with proper CRS metadata or assign manually.")
+        sys.exit(1)
+    if choice not in epsg_map:
+        print("Invalid option. Aborting.")
+        sys.exit(1)
+    print(f"✅ Using EPSG:{epsg_map[choice]} for missing CRS.")
+    return epsg_map[choice]
+
 def build_pipeline(input_path, output_path, resolution=1.0, epsg=None):
     pipeline = [
         {
@@ -90,7 +111,7 @@ def log_raster_extent(tif_path, csv_path):
             ])
 
 def rasterize_file(args_tuple):
-    laz_path, output_dir, resolution, force, log_csv_path = args_tuple
+    laz_path, output_dir, resolution, force, log_csv_path, epsg = args_tuple
     laz_path = Path(laz_path)
     output_name = laz_path.stem + "_dsm.tif"
     output_path = Path(output_dir) / output_name
@@ -99,11 +120,6 @@ def rasterize_file(args_tuple):
     if output_path.exists() and not force:
         print(f"[SKIP] {output_path.name} exists.")
         return str(output_path)
-
-    epsg = get_epsg_code(laz_path)
-    if not epsg:
-        print(f"[WARN] EPSG code missing from {laz_path}")
-        epsg = prompt_for_epsg()
 
     pipeline = build_pipeline(laz_path, output_path, resolution, epsg)
     pipeline_path = output_path.with_suffix(".json")
@@ -122,27 +138,6 @@ def rasterize_file(args_tuple):
         return None
     finally:
         pipeline_path.unlink(missing_ok=True)
-
-def prompt_for_epsg():
-    print("Please choose a CRS to assign to files with missing EPSG:")
-    print("  1. WGS 84 (EPSG:4326)                   – GPS lat/lon")
-    print("  2. UTM Zone 11N (WGS84) (EPSG:32611)     – Western US")
-    print("  3. NAD83 / UTM Zone 15N (EPSG:26915)     – Central US")
-    print("  4. NAD83 / California Albers (EPSG:3310) – California")
-    print("  5. Web Mercator (EPSG:3857)              – Online maps")
-    print("  q. Quit")
-    choice = input("Enter 1–5 to apply EPSG to missing files, or q to quit: ").strip()
-    epsg_map = {
-        "1": 4326, "2": 32611, "3": 26915, "4": 3310, "5": 3857
-    }
-    if choice.lower() == "q" or choice == "":
-        print("Aborting. Please re-run with proper CRS metadata or assign manually.")
-        sys.exit(1)
-    if choice not in epsg_map:
-        print("Invalid option. Aborting.")
-        sys.exit(1)
-    print(f"✅ Using EPSG:{epsg_map[choice]} for missing CRS.")
-    return epsg_map[choice]
 
 def merge_tiles_rasterio(tile_paths, merged_output_path):
     print(f"\n[MOSAIC] Merging {len(tile_paths)} tiles using rasterio...")
@@ -231,7 +226,14 @@ def main():
         writer = csv.writer(f)
         writer.writerow(["tile", "crs", "xmin", "ymin", "xmax", "ymax", "res_x", "res_y", "zmin", "zmax"])
 
-    task_args = [(str(f), output_dir, args.resolution, args.force, csv_log_path) for f in las_files]
+    # Precompute EPSG values in the main process
+    task_args = []
+    for path in las_files:
+        epsg = get_epsg_code(path)
+        if not epsg:
+            print(f"[WARN] EPSG code missing from {path}")
+            epsg = prompt_for_epsg()
+        task_args.append((str(path), output_dir, args.resolution, args.force, csv_log_path, epsg))
 
     with Pool(args.workers) as pool:
         results = list(tqdm(pool.imap_unordered(rasterize_file, task_args), total=len(task_args)))
