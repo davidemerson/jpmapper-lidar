@@ -88,6 +88,28 @@ For NYC (this was developed for use in NYC),
 
 ## jpmapper-lidar (the main application)
 
+### getting your DSM data
+See above, this is why we have a preprocessor - you want to run your .las files through `jpmapper-rasterize.py` to create a GeoTIFF DSM of your area.
+
+### usage example
+```
+python3 jpmapper-lidar.py \
+  --point-a "144 Spencer St, Brooklyn, NY" \
+  --override-a 100 \
+  --point-b "303 Vernon Ave, Brooklyn, NY" \
+  --override-b 100 \
+  --dsm /mnt/your-geotiff-dsm.tif \
+  --frequency-ghz 5.8
+```
+
+### options
+`--point-a` = Start point (lat,lon or address), required
+`--point-b` = End point (lat,lon or address), required
+`--dsm` = Path to DSM raster or folder, required
+`--frequency-ghz` = Transmission frequency in GHz, required
+`--override-a` = Override elevation at point A (meters), use this optionally if you have an antenna, or if the data doesn't properly represent the point elevation for some reason.
+`--override-b` = Override elevation at point B (meters), use this optionally if you have an antenna, or if the data doesn't properly represent the point elevation for some reason.
+
 (((In Progress, don't think too hard about this section yet, it's carryover from `jpmapper-osm`)))
 
 Usage Examples:
