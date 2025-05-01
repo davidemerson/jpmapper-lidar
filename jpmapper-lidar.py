@@ -134,7 +134,6 @@ def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, num_
     for i in range(num_samples):
         x, y = transformer.transform(lons[i], lats[i])
         col, row = ~meta["transform"] * (x, y)
-    row, col = int(row), int(col)
         row, col = int(row), int(col)
 
         if not (0 <= row < dsm.shape[0] and 0 <= col < dsm.shape[1]):
