@@ -76,8 +76,7 @@ def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz):
     partial_count = 0
     suspect_count = 0
 
-    print("
-=== Link Summary ===")
+    print("\n=== Link Summary ===")
     print(f"Total distance: {d:.2f} meters")
     print(f"Point A elevation: {elev1:.2f} m")
     print(f"Point B elevation: {elev2:.2f} m")
