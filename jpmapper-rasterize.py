@@ -136,14 +136,25 @@ def print_sample_latlon_points(tif_path):
         band = src.read(1)
         nodata = src.nodata
         rows, cols = band.shape
-        valid = [(r, c) for r in range(rows) for c in range(cols)
-                 if nodata is None or band[r, c] != nodata]
+        debug(f"Scanning raster of size {rows}x{cols}")
+
+        valid = []
+        attempts = 0
+        max_attempts = 100000
+
+        while len(valid) < 2 and attempts < max_attempts:
+            row = random.randint(0, rows - 1)
+            col = random.randint(0, cols - 1)
+            if nodata is None or band[row, col] != nodata:
+                valid.append((row, col))
+            attempts += 1
+
         if len(valid) < 2:
-            print("⚠️ Not enough valid points.")
+            print("⚠️ Not enough valid points found after sampling.")
             return
-        samples = random.sample(valid, 2)
+
         print("\n🧪 Sample points from DSM tile:")
-        for row, col in samples:
+        for row, col in valid:
             x, y = src.transform * (col, row)
             lon, lat = transform(src.crs, "EPSG:4326", [x], [y])
             print(f"   {lat[0]:.6f}, {lon[0]:.6f}")
