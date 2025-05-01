@@ -157,7 +157,8 @@ def print_sample_latlon_points(tif_path):
         for row, col in valid:
             x, y = src.transform * (col, row)
             lon, lat = transform(src.crs, "EPSG:4326", [x], [y])
-            print(f"   {lat[0]:.6f}, {lon[0]:.6f}")
+            z = band[row, col]
+            print(f"   {lat[0]:.6f}, {lon[0]:.6f}, Elevation: {z:.2f} m")
 
 def rasterize_file(args_tuple):
     laz_path, output_dir, resolution, force, csv_path, epsg = args_tuple

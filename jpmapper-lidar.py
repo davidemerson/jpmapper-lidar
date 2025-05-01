@@ -51,7 +51,24 @@ def load_dsm_dataset(dsm_path):
             return src.read(1), src.meta
 
 
+
 def get_elevation_from_dsm(lat, lon, dsm, meta):
+    # Detect if CRS uses feet (ftUS or US survey foot)
+    crs_str = str(meta["crs"]).lower()
+    uses_feet = "foot" in crs_str or "ft" in crs_str
+
+    transformer = Transformer.from_crs("EPSG:4326", meta["crs"], always_xy=True)
+    x, y = transformer.transform(lon, lat)
+    row, col = ~meta["transform"] * (x, y)
+    row, col = int(row), int(col)
+    if 0 <= row < dsm.shape[0] and 0 <= col < dsm.shape[1]:
+        elevation = dsm[row, col]
+        if uses_feet:
+            elevation *= 0.3048  # convert feet to meters
+        return elevation
+    else:
+        raise ValueError("Coordinates out of DSM bounds.")
+
     transformer = Transformer.from_crs("EPSG:4326", meta["crs"], always_xy=True)
     x, y = transformer.transform(lon, lat)
     row, col = ~meta["transform"] * (x, y)
