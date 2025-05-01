@@ -108,12 +108,10 @@ def fresnel_radius(d, f_hz):
 def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, num_samples=200):
     from geopy.distance import geodesic
 
-    # Calculate LOS line and Fresnel zone radius
     f_hz = freq_ghz * 1e9
     total_distance = geodesic((lat1, lon1), (lat2, lon2)).meters
     r_fresnel = 17.32 * np.sqrt(total_distance / 1000 / (4 * f_hz / 1e9))
 
-    # Interpolate points along the path
     lats = np.linspace(lat1, lat2, num_samples)
     lons = np.linspace(lon1, lon2, num_samples)
     distances = np.linspace(0, total_distance, num_samples)
@@ -152,18 +150,18 @@ def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, num_
             clear += 1
 
     if skipped == num_samples:
-        from rasterio.coords import BoundingBox
-        bounds = meta["transform"] * (0, 0), meta["transform"] * (dsm.shape[1], dsm.shape[0])
-        minx, miny = bounds[0]
-        maxx, maxy = bounds[1]
+        # Print corrected bounds
         transformer_back = Transformer.from_crs(meta["crs"], "EPSG:4326", always_xy=True)
-        minlon, minlat = transformer_back.transform(minx, miny)
-        maxlon, maxlat = transformer_back.transform(maxx, maxy)
+        tl_x, tl_y = meta["transform"] * (0, 0)
+        br_x, br_y = meta["transform"] * (dsm.shape[1], dsm.shape[0])
+        min_lon, max_lat = transformer_back.transform(tl_x, tl_y)
+        max_lon, min_lat = transformer_back.transform(br_x, br_y)
 
-        print("ERROR: All path samples were outside the DSM raster bounds.")
-        print(f"DSM covers approximately: lat {minlat:.6f} to {maxlat:.6f}, lon {minlon:.6f} to {maxlon:.6f}")
         midpoint_lat = (lat1 + lat2) / 2
         midpoint_lon = (lon1 + lon2) / 2
+
+        print("ERROR: All path samples were outside the DSM raster bounds.")
+        print(f"DSM covers approximately: lat {min_lat:.6f} to {max_lat:.6f}, lon {min_lon:.6f} to {max_lon:.6f}")
         print(f"Midpoint of path: lat {midpoint_lat:.6f}, lon {midpoint_lon:.6f}")
         raise ValueError("No valid samples within DSM extent.")
 
