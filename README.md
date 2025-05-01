@@ -155,11 +155,11 @@ Analysis failed: No valid samples were found within the DSM coverage. Please ver
 ```
 
 ### options
-`--point-a` = Start point (lat,lon or address), required
-`--point-b` = End point (lat,lon or address), required
-`--dsm` = Path to DSM raster or folder, required
-`--frequency-ghz` = Transmission frequency in GHz, required
-`--override-a` = Override elevation at point A (meters), use this optionally if you have an antenna, or if the data doesn't properly represent the point elevation for some reason.
-`--override-b` = Override elevation at point B (meters), use this optionally if you have an antenna, or if the data doesn't properly represent the point elevation for some reason.
-`--csv-input` = bulk input option via csv
-`--csv-output` = if you give me a csv, I'll give you a csv back
+* `--point-a` = Start point (lat,lon or address), required
+* `--point-b` = End point (lat,lon or address), required
+* `--dsm` = Path to DSM raster or folder, required
+* `--frequency-ghz` = Transmission frequency in GHz, required
+* `--override-a` = Override elevation at point A (meters), use this optionally if you have an antenna, or if the data doesn't properly represent the point elevation for some reason.
+* `--override-b` = Override elevation at point B (meters), use this optionally if you have an antenna, or if the data doesn't properly represent the point elevation for some reason.
+* `--csv-input` = bulk input option via csv
+* `--csv-output` = if you give me a csv, I'll give you a csv back
