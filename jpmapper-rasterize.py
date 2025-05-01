@@ -252,7 +252,6 @@ def main():
     parser.add_argument("--no-merge", action="store_true", help="Do not merge DSM tiles into a unified raster")
 
     args = parser.parse_args()
-
     check_cpu_advice(args.workers)
 
     input_dir = Path(args.lasdir)
@@ -264,11 +263,17 @@ def main():
     las_files = sorted([f for f in input_dir.glob("*.laz")] + [f for f in input_dir.glob("*.las")])
     print(f"🔍 Found {len(las_files)} LIDAR files. Rasterizing with {args.workers} workers...")
 
+    # Write CSV header
     with open(csv_log_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["tile", "crs", "xmin", "ymin", "xmax", "ymax", "res_x", "res_y", "zmin", "zmax"])
+        writer.writerow([
+            "tile", "crs",
+            "lat_min", "lon_min", "lat_max", "lon_max",
+            "res_x_m", "res_y_m",
+            "zmin_m", "zmax_m"
+        ])
 
-    # Precompute EPSG values in the main process
+    # Detect or prompt for EPSG per file
     task_args = []
     for path in las_files:
         epsg = get_epsg_code(path)
@@ -277,12 +282,14 @@ def main():
             epsg = prompt_for_epsg()
         task_args.append((str(path), output_dir, args.resolution, args.force, csv_log_path, epsg))
 
+    # Run rasterization
     with Pool(args.workers) as pool:
         results = list(tqdm(pool.imap_unordered(rasterize_file, task_args), total=len(task_args)))
 
     valid_tiles = [r for r in results if r is not None and Path(r).exists()]
     print(f"\n✅ Rasterization complete. {len(valid_tiles)} tiles ready.")
 
+    # Merge tiles unless skipped
     if valid_tiles and not args.no_merge:
         merge_tiles_rasterio(valid_tiles, merged_output_path)
         if args.cleanup_tiles:
@@ -292,8 +299,13 @@ def main():
     else:
         print("⚠️ No valid tiles to merge. Skipping DSM merge.")
 
+    # Optionally delete raw input
     if args.cleanup_lidar:
         cleanup_files([str(f) for f in las_files], "LIDAR")
+
+    # Print two random lat/lon points for connectivity testing
+    if valid_tiles:
+        print_sample_latlon_points(valid_tiles[0])
 
 if __name__ == "__main__":
     main()
