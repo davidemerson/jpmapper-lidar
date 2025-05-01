@@ -52,7 +52,28 @@ def load_dsm_dataset(dsm_path):
 
 
 
+
 def get_elevation_from_dsm(lat, lon, dsm, meta):
+    # Detect if CRS uses feet (ftUS or US survey foot)
+    crs_str = str(meta["crs"]).lower()
+    uses_feet = "foot" in crs_str or "ft" in crs_str
+
+    transformer = Transformer.from_crs("EPSG:4326", meta["crs"], always_xy=True)
+    x, y = transformer.transform(lon, lat)
+    row, col = ~meta["transform"] * (x, y)
+    row, col = int(row), int(col)
+
+    # Clamp row/col to valid range
+    row = max(0, min(row, dsm.shape[0] - 1))
+    col = max(0, min(col, dsm.shape[1] - 1))
+
+    elevation = dsm[row, col]
+    if uses_feet:
+        elevation *= 0.3048  # convert feet to meters
+
+    print(f"Coordinate ({lat:.6f}, {lon:.6f}) maps to pixel (row={row}, col={col}) with elevation {elevation:.2f} meters")
+    return elevation
+
     # Detect if CRS uses feet (ftUS or US survey foot)
     crs_str = str(meta["crs"]).lower()
     uses_feet = "foot" in crs_str or "ft" in crs_str
