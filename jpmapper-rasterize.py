@@ -6,84 +6,90 @@ import shutil
 import subprocess
 import argparse
 import csv
+import random
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
 from tqdm import tqdm
+
+import rasterio
+from rasterio.warp import transform_bounds, transform
+from rasterio.merge import merge
 
 def check_dependencies():
     print("[CHECK] Verifying environment dependencies...")
     if shutil.which("pdal") is None:
         print("❌ Missing command: 'pdal'")
-        print("   Please install it via your system package manager.")
-        print("   Example (Ubuntu): sudo apt install pdal")
         sys.exit(1)
     try:
-        import tqdm, rasterio  # noqa
-        from rasterio.merge import merge  # noqa
+        import tqdm, rasterio
     except ImportError:
-        print("❌ Missing Python modules: 'tqdm' and/or 'rasterio'")
-        print("   Install with: pip install tqdm rasterio")
+        print("❌ Missing Python modules. Try: pip install tqdm rasterio")
         sys.exit(1)
     print("✅ All dependencies are satisfied.\n")
 
 def check_cpu_advice(workers_requested):
     total_cores = os.cpu_count()
-    if total_cores is None:
-        return
-    print(f"[INFO] Detected {total_cores} CPU cores available.")
-    if workers_requested < total_cores:
+    if total_cores and workers_requested < total_cores:
         print(f"⚠️  You are using {workers_requested} workers, but {total_cores} cores are available.")
-        print(f"💡 Consider increasing --workers to {total_cores} for full CPU utilization.\n")
-    else:
-        print("✅ Worker count matches or exceeds available cores.\n")
+        print(f"💡 Consider increasing --workers to {total_cores}.\n")
 
 def get_epsg_code(las_path):
     try:
-        result = subprocess.run(
-            ["pdal", "info", "--metadata", str(las_path)],
-            capture_output=True, text=True, check=True
-        )
+        result = subprocess.run(["pdal", "info", "--metadata", str(las_path)], capture_output=True, text=True, check=True)
         meta = json.loads(result.stdout)
-        srs = meta["metadata"].get("srs", {})
-        epsg = srs.get("epsg")
+        epsg = meta["metadata"].get("srs", {}).get("epsg")
         return epsg if isinstance(epsg, int) else None
-    except Exception as e:
-        print(f"[WARN] Failed to detect EPSG for {las_path}: {e}")
+    except Exception:
         return None
 
 def prompt_for_epsg():
-    print("Please choose a CRS to assign to files with missing EPSG:")
-    print("  1. WGS 84 (EPSG:4326)                   – GPS lat/lon")
-    print("  2. UTM Zone 11N (WGS84) (EPSG:32611)     – Western US")
-    print("  3. NAD83 / UTM Zone 15N (EPSG:26915)     – Central US")
-    print("  4. NAD83 / California Albers (EPSG:3310) – California")
-    print("  5. Web Mercator (EPSG:3857)              – Online maps")
+    print("Please choose a CRS for files with missing EPSG:")
+    print("  1. WGS 84 (EPSG:4326)")
+    print("  2. UTM Zone 11N (EPSG:32611)")
+    print("  3. NAD83 / UTM Zone 15N (EPSG:26915)")
+    print("  4. NAD83 / California Albers (EPSG:3310)")
+    print("  5. Web Mercator (EPSG:3857)")
+    print("  6. NYC 2021 Data CRS (EPSG:6539 + EPSG:6360)")
     print("  q. Quit")
-    choice = input("Enter 1–5 to apply EPSG to missing files, or q to quit: ").strip()
+    choice = input("Enter 1–6 or q: ").strip()
     epsg_map = {
-        "1": 4326, "2": 32611, "3": 26915, "4": 3310, "5": 3857
+        "1": "EPSG:4326",
+        "2": "EPSG:32611",
+        "3": "EPSG:26915",
+        "4": "EPSG:3310",
+        "5": "EPSG:3857",
+        "6": ('COMPD_CS["NAD83(2011) / New York Long Island (ftUS) + NAVD88 height (ftUS)",'
+              'PROJCS["NAD83(2011) / New York Long Island (ftUS)",'
+              'GEOGCS["NAD83(2011)",DATUM["NAD83 (National Spatial Reference System 2011)",'
+              'SPHEROID["GRS 1980",6378137,298.257222101]],PRIMEM["Greenwich",0],'
+              'UNIT["degree",0.0174532925199433]],'
+              'PROJECTION["Lambert_Conformal_Conic_2SP"],'
+              'PARAMETER["standard_parallel_1",41.03333333333333],'
+              'PARAMETER["standard_parallel_2",40.66666666666666],'
+              'PARAMETER["latitude_of_origin",40.16666666666666],'
+              'PARAMETER["central_meridian",-74],'
+              'PARAMETER["false_easting",984250],'
+              'PARAMETER["false_northing",0],'
+              'UNIT["US survey foot",0.3048006096012192],'
+              'AXIS["X",EAST],AXIS["Y",NORTH]],'
+              'VERT_CS["NAVD88 height (ftUS)",'
+              'VERT_DATUM["North American Vertical Datum 1988",2005],'
+              'UNIT["US survey foot",0.3048006096012192],AXIS["Up",UP]]]')
     }
-    if choice.lower() == "q" or choice == "":
-        print("Aborting. Please re-run with proper CRS metadata or assign manually.")
-        sys.exit(1)
+    if choice.lower() == "q":
+        sys.exit("Aborted by user.")
     if choice not in epsg_map:
-        print("Invalid option. Aborting.")
-        sys.exit(1)
-    print(f"✅ Using EPSG:{epsg_map[choice]} for missing CRS.")
+        sys.exit("Invalid option.")
+    print(f"✅ Using {epsg_map[choice]}")
     return epsg_map[choice]
 
 def build_pipeline(input_path, output_path, resolution=1.0, epsg=None):
-    pipeline = [
-        {
-            "type": "readers.las",
-            "filename": str(input_path)
-        }
-    ]
+    pipeline = [{"type": "readers.las", "filename": str(input_path)}]
     if epsg:
         pipeline.append({
             "type": "filters.reprojection",
-            "in_srs": f"EPSG:{epsg}",
-            "out_srs": f"EPSG:{epsg}"
+            "in_srs": epsg,
+            "out_srs": epsg
         })
     pipeline.append({
         "type": "writers.gdal",
@@ -96,221 +102,148 @@ def build_pipeline(input_path, output_path, resolution=1.0, epsg=None):
     return pipeline
 
 def log_raster_extent(tif_path, csv_path):
-    import rasterio
-    from rasterio.warp import transform_bounds
-
     with rasterio.open(tif_path) as src:
         bounds = src.bounds
         crs = src.crs
         zmin, zmax = src.read(1).min(), src.read(1).max()
-
-        # Convert bounding box to EPSG:4326 if needed
         if crs and crs.to_epsg() != 4326:
             gps_bounds = transform_bounds(crs, "EPSG:4326", *bounds)
         else:
-            gps_bounds = bounds  # Already in EPSG:4326
-
+            gps_bounds = bounds
         lon_min, lat_min, lon_max, lat_max = gps_bounds
-        crs_str = crs.to_string() if crs else "None"
-
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
-                Path(tif_path).name,
-                crs_str,
+                Path(tif_path).name, crs.to_string() if crs else "None",
                 lat_min, lon_min, lat_max, lon_max,
                 src.res[0], src.res[1],
                 float(zmin), float(zmax)
             ])
 
 def print_sample_latlon_points(tif_path):
-    import rasterio
-    import random
-    from rasterio.warp import transform
-
     with rasterio.open(tif_path) as src:
         band = src.read(1)
         nodata = src.nodata
         rows, cols = band.shape
-
-        # Find all non-nodata pixels
-        valid_coords = [
-            (row, col)
-            for row in range(rows)
-            for col in range(cols)
-            if nodata is None or band[row, col] != nodata
-        ]
-
-        if len(valid_coords) < 2:
-            print("⚠️ Not enough valid data points to sample from.")
+        valid = [(r, c) for r in range(rows) for c in range(cols)
+                 if nodata is None or band[r, c] != nodata]
+        if len(valid) < 2:
+            print("⚠️ Not enough valid points.")
             return
-
-        samples = random.sample(valid_coords, 2)
-        lats_lons = []
-
+        samples = random.sample(valid, 2)
         for row, col in samples:
             x, y = src.transform * (col, row)
             lon, lat = transform(src.crs, "EPSG:4326", [x], [y])
-            lats_lons.append((lat[0], lon[0]))
-
-        print("\n🧪 Here's a couple points from the raster tiles for testing:")
-        for lat, lon in lats_lons:
-            print(f"   {lat:.6f}, {lon:.6f}")
+            print(f"🧪 Sample point: {lat[0]:.6f}, {lon[0]:.6f}")
 
 def rasterize_file(args_tuple):
-    laz_path, output_dir, resolution, force, log_csv_path, epsg = args_tuple
+    laz_path, output_dir, resolution, force, csv_path, epsg = args_tuple
     laz_path = Path(laz_path)
-    output_name = laz_path.stem + "_dsm.tif"
-    output_path = Path(output_dir) / output_name
-
-    print(f"[START] Processing {laz_path.name}")
-    if output_path.exists() and not force:
-        print(f"[SKIP] {output_path.name} exists.")
-        return str(output_path)
-
-    pipeline = build_pipeline(laz_path, output_path, resolution, epsg)
-    pipeline_path = output_path.with_suffix(".json")
-
-    with open(pipeline_path, 'w') as f:
+    out_path = Path(output_dir) / (laz_path.stem + "_dsm.tif")
+    if out_path.exists() and not force:
+        print(f"[SKIP] {out_path.name} exists.")
+        return str(out_path)
+    pipeline = build_pipeline(laz_path, out_path, resolution, epsg)
+    jpath = out_path.with_suffix(".json")
+    with open(jpath, 'w') as f:
         json.dump(pipeline, f)
-
     try:
-        subprocess.run(["pdal", "pipeline", str(pipeline_path)],
-                       capture_output=True, text=True, check=True)
-        print(f"[DONE] {output_path.name}")
-        log_raster_extent(output_path, log_csv_path)
-        return str(output_path)
+        subprocess.run(["pdal", "pipeline", str(jpath)], check=True, capture_output=True, text=True)
+        print(f"[DONE] {out_path.name}")
+        log_raster_extent(out_path, csv_path)
+        return str(out_path)
     except subprocess.CalledProcessError as e:
-        print(f"[FAIL] {laz_path.name}:\n{e.stderr}")
+        print(f"[FAIL] {laz_path.name}: {e.stderr}")
         return None
     finally:
-        pipeline_path.unlink(missing_ok=True)
+        jpath.unlink(missing_ok=True)
 
-def merge_tiles_rasterio(tile_paths, merged_output_path):
-    print(f"\n[MOSAIC] Merging {len(tile_paths)} tiles using rasterio...")
-    import rasterio
-    from rasterio.merge import merge
-    from rasterio.crs import CRS
-
-    crs_map = {}
+def merge_tiles_rasterio(tile_paths, out_path):
     datasets = []
+    crs_map = {}
     fallback_crs = None
-
     for path in tile_paths:
         ds = rasterio.open(path)
-
         if ds.crs is None:
-            print(f"\n❌ Missing CRS in file: {path}")
             if fallback_crs is None:
-                fallback_epsg = prompt_for_epsg()
-                fallback_crs = CRS.from_epsg(fallback_epsg)
+                fallback_crs = CRS.from_epsg(int(prompt_for_epsg().split(":")[-1]))
             ds.crs = fallback_crs
-
         datasets.append(ds)
-        crs = ds.crs.to_string()
-        crs_map.setdefault(crs, []).append(path)
-
+        crs_map.setdefault(ds.crs.to_string(), []).append(path)
     if len(crs_map) > 1:
-        print("\n❌ CRS mismatch detected among input tiles.")
-        print("Each input DSM .tif file must use the same Coordinate Reference System.")
-        print("The following CRS groups were found:")
-        for crs, files in crs_map.items():
-            print(f"  - CRS: {crs}")
-            for f in files:
-                print(f"    • {f}")
-        print("\n💡 To fix: split files by CRS and process each batch separately.")
+        print("❌ CRS mismatch in tiles. Merge failed.")
         sys.exit(1)
-
     mosaic, transform = merge(datasets)
     meta = datasets[0].meta.copy()
-    meta.update({
-        "height": mosaic.shape[1],
-        "width": mosaic.shape[2],
-        "transform": transform
-    })
-
-    with rasterio.open(merged_output_path, "w", **meta) as dst:
+    meta.update({"height": mosaic.shape[1], "width": mosaic.shape[2], "transform": transform})
+    with rasterio.open(out_path, "w", **meta) as dst:
         dst.write(mosaic)
-
-    print(f"[SUCCESS] Merged DSM written to {merged_output_path}")
+    print(f"[SUCCESS] Merged DSM written to {out_path}")
 
 def cleanup_files(file_paths, label):
-    print(f"[CLEANUP] Deleting {len(file_paths)} {label} files...")
-    for path in file_paths:
-        try:
-            Path(path).unlink()
-        except Exception as e:
-            print(f"[WARN] Failed to delete {path}: {e}")
+    print(f"[CLEANUP] Removing {len(file_paths)} {label} files...")
+    for p in file_paths:
+        try: Path(p).unlink()
+        except Exception as e: print(f"Failed: {p}: {e}")
 
 def main():
     check_dependencies()
-
-    parser = argparse.ArgumentParser(description="Rasterize a folder of LIDAR files into a unified DSM GeoTIFF.")
-    parser.add_argument("--lasdir", required=True, help="Input directory of .las/.laz files")
-    parser.add_argument("--outdir", required=True, help="Directory to write DSM tiles and merged output")
-    parser.add_argument("--resolution", type=float, default=1.0, help="Raster resolution in meters")
-    parser.add_argument("--force", action="store_true", help="Overwrite existing raster tiles")
-    parser.add_argument("--workers", type=int, default=cpu_count(), help="Number of parallel processes")
-    parser.add_argument("--merged", default="merged_dsm.tif", help="Filename for merged DSM GeoTIFF")
-    parser.add_argument("--cleanup-tiles", action="store_true", help="Delete DSM tile .tif files after merge")
-    parser.add_argument("--cleanup-lidar", action="store_true", help="Delete input .las/.laz files after rasterizing")
-    parser.add_argument("--no-merge", action="store_true", help="Do not merge DSM tiles into a unified raster")
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--lasdir", required=True)
+    parser.add_argument("--outdir", required=True)
+    parser.add_argument("--resolution", type=float, default=1.0)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--workers", type=int, default=cpu_count())
+    parser.add_argument("--merged", default="merged_dsm.tif")
+    parser.add_argument("--cleanup-tiles", action="store_true")
+    parser.add_argument("--cleanup-lidar", action="store_true")
+    parser.add_argument("--no-merge", action="store_true")
     args = parser.parse_args()
+
     check_cpu_advice(args.workers)
+    idir = Path(args.lasdir)
+    odir = Path(args.outdir)
+    odir.mkdir(parents=True, exist_ok=True)
+    merged_path = odir / args.merged
+    csv_path = odir / "dsm_tile_index.csv"
 
-    input_dir = Path(args.lasdir)
-    output_dir = Path(args.outdir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    merged_output_path = output_dir / args.merged
-    csv_log_path = output_dir / "dsm_tile_index.csv"
+    files = sorted(idir.glob("*.las") + idir.glob("*.laz"))
+    print(f"🔍 Found {len(files)} LIDAR files. Rasterizing...")
 
-    las_files = sorted([f for f in input_dir.glob("*.laz")] + [f for f in input_dir.glob("*.las")])
-    print(f"🔍 Found {len(las_files)} LIDAR files. Rasterizing with {args.workers} workers...")
-
-    # Write CSV header
-    with open(csv_log_path, "w", newline="") as f:
+    with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "tile", "crs",
-            "lat_min", "lon_min", "lat_max", "lon_max",
-            "res_x_m", "res_y_m",
-            "zmin_m", "zmax_m"
-        ])
+        writer.writerow(["tile", "crs", "lat_min", "lon_min", "lat_max", "lon_max", "res_x_m", "res_y_m", "zmin_m", "zmax_m"])
 
-    # Detect or prompt for EPSG per file
-    task_args = []
-    for path in las_files:
-        epsg = get_epsg_code(path)
+    tasks = []
+    for f in files:
+        epsg = get_epsg_code(f)
         if not epsg:
-            print(f"[WARN] EPSG code missing from {path}")
+            print(f"[WARN] No EPSG in {f}")
             epsg = prompt_for_epsg()
-        task_args.append((str(path), output_dir, args.resolution, args.force, csv_log_path, epsg))
+        else:
+            epsg = f"EPSG:{epsg}"
+        tasks.append((f, odir, args.resolution, args.force, csv_path, epsg))
 
-    # Run rasterization
     with Pool(args.workers) as pool:
-        results = list(tqdm(pool.imap_unordered(rasterize_file, task_args), total=len(task_args)))
+        results = list(tqdm(pool.imap_unordered(rasterize_file, tasks), total=len(tasks)))
 
-    valid_tiles = [r for r in results if r is not None and Path(r).exists()]
-    print(f"\n✅ Rasterization complete. {len(valid_tiles)} tiles ready.")
+    valid = [r for r in results if r and Path(r).exists()]
+    print(f"\n✅ Rasterization complete. {len(valid)} tiles ready.")
 
-    # Merge tiles unless skipped
-    if valid_tiles and not args.no_merge:
-        merge_tiles_rasterio(valid_tiles, merged_output_path)
+    if valid and not args.no_merge:
+        merge_tiles_rasterio(valid, merged_path)
         if args.cleanup_tiles:
-            cleanup_files(valid_tiles, "tile DSM")
+            cleanup_files(valid, "tile DSMs")
     elif args.no_merge:
-        print("ℹ️ Skipping merge step (user set --no-merge).")
+        print("ℹ️ Merge skipped by flag.")
     else:
-        print("⚠️ No valid tiles to merge. Skipping DSM merge.")
+        print("⚠️ Nothing to merge.")
 
-    # Optionally delete raw input
     if args.cleanup_lidar:
-        cleanup_files([str(f) for f in las_files], "LIDAR")
+        cleanup_files([str(f) for f in files], "LIDAR")
 
-    # Print two random lat/lon points for connectivity testing
-    if valid_tiles:
-        print_sample_latlon_points(valid_tiles[0])
+    if valid:
+        print_sample_latlon_points(valid[0])
 
 if __name__ == "__main__":
     main()
