@@ -119,29 +119,29 @@ def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, num_
     distances = np.linspace(0, total_distance, num_samples)
     los_elev = elev1 + (elev2 - elev1) * (distances / total_distance)
 
-    # Transformer
     transformer = Transformer.from_crs("EPSG:4326", meta["crs"], always_xy=True)
     crs_str = str(meta["crs"]).lower()
     uses_feet = "foot" in crs_str or "ft" in crs_str
 
-    # DSM sampling
     obstruction = 0
     partial = 0
     clear = 0
+    skipped = 0
 
     for i in range(num_samples):
         x, y = transformer.transform(lons[i], lats[i])
         row, col = ~meta["transform"] * (x, y)
         row, col = int(row), int(col)
 
-        if 0 <= row < dsm.shape[0] and 0 <= col < dsm.shape[1]:
-            terrain = dsm[row, col]
-            if uses_feet:
-                terrain *= 0.3048  # feet to meters
-        else:
+        # Clamp to raster bounds
+        if not (0 <= row < dsm.shape[0] and 0 <= col < dsm.shape[1]):
+            skipped += 1
             continue
 
-        # Compute offset from LOS
+        terrain = dsm[row, col]
+        if uses_feet:
+            terrain *= 0.3048
+
         clearance = los_elev[i] - terrain
         fresnel_radius_here = r_fresnel * np.sqrt((distances[i] * (total_distance - distances[i])) / total_distance**2)
 
@@ -158,7 +158,7 @@ def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, num_
     print(f"Point B elevation: {elev2:.2f} m")
     print(f"Frequency: {freq_ghz:.3f} GHz ({f_hz:.0f} Hz)")
     print(f"First Fresnel zone radius (midpoint): {r_fresnel:.2f} meters")
-    print(f"Obstruction analysis: {obstruction} obstructed, {partial} partial, {clear} clear")
+    print(f"Obstruction analysis: {obstruction} obstructed, {partial} partial, {clear} clear, {skipped} skipped")
 
     if obstruction > 0:
         print("Verdict: Obstructed")
