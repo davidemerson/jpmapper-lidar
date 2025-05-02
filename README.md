@@ -151,6 +151,8 @@ python3 jpmapper-lidar.py --dsm geodata/merged_dsm.tif \
   --csv-output results.csv
 ```
 
+In this repo, there are some sample CSV files for testing purposes with points already in them - check the samplepoints/ folder.
+
 ### output examples
 
 A normal looking run:
