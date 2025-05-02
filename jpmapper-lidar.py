@@ -191,10 +191,10 @@ def analyze_path(lat1, lon1, lat2, lon2, elev1, elev2, dsm, meta, freq_ghz, num_
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--point-a", required=True, help="Start point (lat,lon or address)")
-    parser.add_argument("--point-b", required=True, help="End point (lat,lon or address)")
+    parser.add_argument("--point-a", help="Start point (lat,lon or address)")
+    parser.add_argument("--point-b", help="End point (lat,lon or address)")
     parser.add_argument("--dsm", required=True, help="Path to DSM raster or folder")
-    parser.add_argument("--frequency-ghz", type=float, required=True, help="Transmission frequency in GHz")
+    parser.add_argument("--frequency-ghz", type=float, help="Transmission frequency in GHz")
     parser.add_argument("--override-a", type=float, help="Override elevation at point A (meters)")
     parser.add_argument("--override-b", type=float, help="Override elevation at point B (meters)")
     
@@ -202,6 +202,9 @@ def main():
     parser.add_argument("--csv-output", type=str, help="Optional path to write results if using --csv-input")
 
     args = parser.parse_args()
+    if not args.csv_input:
+        if not args.point_a or not args.point_b or not args.frequency_ghz:
+            parser.error("--point-a, --point-b, and --frequency-ghz are required unless --csv-input is provided.")
 
     dsm, meta = load_dsm_dataset(args.dsm)
 
