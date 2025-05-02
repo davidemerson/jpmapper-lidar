@@ -26,6 +26,13 @@ A python app which
     * terrain
     * buildings and obstructions mid-path
     * fresnel zone obstruction
+
+A python app which
+ * takes a folder of .las files
+ * compares their data to a defined geographical box
+ * deletes .las files which don't contain data in that box
+ * keeps .las files which do contain data in that box
+ * logs its efforts
 ---
 
 ## jpmapper-rasterize (the preprocessor)
@@ -163,3 +170,22 @@ Analysis failed: No valid samples were found within the DSM coverage. Please ver
 * `--override-b` = Override elevation at point B (meters), use this optionally if you have an antenna, or if the data doesn't properly represent the point elevation for some reason.
 * `--csv-input` = bulk input option via csv
 * `--csv-output` = if you give me a csv, I'll give you a csv back
+
+## jpmapper-boxfilter (the filter app)
+Sometimes, say, you have too many .las files. And those suckers are big, and you have to rasterize them. Before you do, which are useful? Which are the ones with the data you want?
+
+To answer this question, we have the jpmapper-boxfilter. Get a directory of .las files together, point this filter at them, and watch the irrelevant ones depart. All efforts are logged in a csv.
+
+You'll need some more python packages for this, so `pip install laspy shapely tqdm`
+
+The whole NYCMesh (mostly the reason this whole thing exists) network fits in a box defined by these four points:
+| Corner | Latitude  | Longitude   |
+|--------|-----------|-------------|
+| SW     | 40.096269 | -74.945492  |
+| NW     | 40.972617 | -74.945492  |
+| NE     | 40.972617 | -73.016222  |
+| SE     | 40.096269 | -73.016222  |
+
+Since this is a rectangle, we can reduce it to two points for simplicity, `NYC_BBOX = box(-74.945492, 40.096269, -73.016222, 40.972617)`
+
+## usage example & output
