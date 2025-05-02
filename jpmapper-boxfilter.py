@@ -6,7 +6,12 @@ from datetime import datetime
 from tqdm import tqdm
 
 # NYC bounding box (min_lon, min_lat, max_lon, max_lat)
-NYC_BBOX = box(-74.945492, 40.096269, -73.016222, 40.972617)
+from pyproj import Transformer
+# Reproject WGS84 bounding box to EPSG:6539 (NY Long Island ftUS)
+transformer = Transformer.from_crs("epsg:4326", "epsg:6539", always_xy=True)
+sw_x, sw_y = transformer.transform(-74.945492, 40.096269)
+ne_x, ne_y = transformer.transform(-73.016222, 40.972617)
+NYC_BBOX = box(sw_x, sw_y, ne_x, ne_y)
 LOG_FILE = "las_filter_log.csv"
 
 def get_las_bounds(filepath):
@@ -47,7 +52,6 @@ def filter_las_files(folder):
         try:
             las_bbox, bbox_vals = get_las_bounds(full_path)
             if las_bbox:
-                intersects = NYC_BBOX.intersects(las_bbox)
                 print(f"[{'KEEP' if intersects else 'DEL '}] {filename} → "
                       f"Bounds: ({bbox_vals[1]:.5f}, {bbox_vals[0]:.5f}) to ({bbox_vals[3]:.5f}, {bbox_vals[2]:.5f})")
                 if intersects:

@@ -86,6 +86,24 @@ For NYC (this was developed for use in NYC),
 * grab either `NYC_2021` or `NYC_TopoBathymetric2017`, they're large
 * place in a directory and point `jpmapper-rasterize` at that directory
 
+I'll save you some trouble and tell you that the NYCMesh network is fully inside these .las files in the NYC_2021 dataset. These are the files you need to download:
+
+| FILENAME     | FTP URL                                                    |
+|--------------|------------------------------------------------------------|
+| 912117.las   | [ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/912117.las](ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/912117.las) |
+| 915117.las   | [ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/915117.las](ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/915117.las) |
+| 912120.las   | [ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/912120.las](ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/912120.las) |
+| 915120.las   | [ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/915120.las](ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/915120.las) |
+| 917120.las   | [ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/917120.las](ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/917120.las) |
+
+```
+wget ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/912117.las \
+     ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/915117.las \
+     ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/912120.las \
+     ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/915120.las \
+     ftp://ftp.gis.ny.gov/elevation/LIDAR/NYC_2021/917120.las
+```
+
 ...but the process is the same for anywhere else too. You can use any .las data you want, as long as it has the locations for which you're searching. Remember:
 
 * You should include anthropogenic features
@@ -186,6 +204,10 @@ The whole NYCMesh (mostly the reason this whole thing exists) network fits in a 
 | NE     | 40.972617 | -73.016222  |
 | SE     | 40.096269 | -73.016222  |
 
-Since this is a rectangle, we can reduce it to two points for simplicity, `NYC_BBOX = box(-74.945492, 40.096269, -73.016222, 40.972617)`
+Since this is a rectangle, we can reduce it to two points for simplicity,
+```
+sw_x, sw_y = transformer.transform(-74.945492, 40.096269)
+ne_x, ne_y = transformer.transform(-73.016222, 40.972617)
+```
 
 ## usage example & output
