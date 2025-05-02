@@ -196,7 +196,7 @@ To answer this question, we have the jpmapper-boxfilter. Get a directory of .las
 
 You'll need some more python packages for this, so `pip install laspy shapely tqdm`
 
-The whole NYCMesh (mostly the reason this whole thing exists) network fits in a box defined by these four points:
+The whole NYCMesh (mostly the reason this thing exists) network fits in a box defined by these four points:
 | Corner | Latitude  | Longitude   |
 |--------|-----------|-------------|
 | SW     | 40.096269 | -74.945492  |
@@ -211,3 +211,12 @@ ne_x, ne_y = transformer.transform(-73.016222, 40.972617)
 ```
 
 ## usage example & output
+```
+[david@blazes-boylan jpmapper-lidar]# python3 jpmapper-boxfilter.py geodata/
+Processing LAS files:   0%|                                                   | 0/5 [00:00<?, ?it/s][KEEP] 912117.las → Bounds: (119894.77700, 914797.89495) to (119999.99200, 914999.99995)
+[KEEP] 915117.las → Bounds: (119792.27600, 915000.00795) to (119999.99900, 915958.60995)
+[KEEP] 912120.las → Bounds: (120000.00700, 913116.99095) to (122499.99900, 914999.99995)
+[KEEP] 915120.las → Bounds: (120000.00000, 915000.00095) to (122499.99900, 917499.99995)
+[KEEP] 917120.las → Bounds: (120315.03300, 917500.00095) to (122499.99900, 919999.99895)
+Processing LAS files: 100%|██████████████████████████████████████████| 5/5 [00:00<00:00, 524.48it/s]
+```
