@@ -52,6 +52,7 @@ def filter_las_files(folder):
         try:
             las_bbox, bbox_vals = get_las_bounds(full_path)
             if las_bbox:
+                intersects = NYC_BBOX.intersects(las_bbox)
                 print(f"[{'KEEP' if intersects else 'DEL '}] {filename} → "
                       f"Bounds: ({bbox_vals[1]:.5f}, {bbox_vals[0]:.5f}) to ({bbox_vals[3]:.5f}, {bbox_vals[2]:.5f})")
                 if intersects:
