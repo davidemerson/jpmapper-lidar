@@ -1,0 +1,1 @@
+"""CLI sub‑package exposed via *typer*."""
