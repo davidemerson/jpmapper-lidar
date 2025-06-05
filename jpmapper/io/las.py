@@ -1,4 +1,4 @@
-"""Helpers for working with LAS/LAZ point‑cloud files."""
+"""Helpers for working with LAS/LAZ point-cloud files."""
 from __future__ import annotations
 
 import logging
@@ -11,6 +11,16 @@ from shapely.geometry import box, Polygon
 logger = logging.getLogger(__name__)
 
 
+def _read_header(path: Path) -> laspy.LasHeader | None:
+    """Return the LAS/LAZ header or *None* on failure (cheap streaming read)."""
+    try:
+        with laspy.open(str(path)) as reader:  # laspy ≥2.4
+            return reader.header
+    except Exception as err:  # noqa: BLE001
+        logger.warning("Unable to read %s – %r", path, err)
+        return None
+
+
 def filter_las_by_bbox(
     las_files: Iterable[Path],
     bbox: tuple[float, float, float, float],
@@ -19,17 +29,15 @@ def filter_las_by_bbox(
 ) -> list[Path]:
     """Return subset of *las_files* whose extent intersects *bbox*.
 
-    If *dst_dir* is given, copy the selected files there; otherwise
-    return their original paths.
+    If *dst_dir* is given, copy the selected files there and return the new
+    paths; otherwise return the original paths.
     """
     poly: Polygon = box(*bbox)
     selected: list[Path] = []
 
     for path in las_files:
-        try:
-            hdr = laspy.read_header(str(path))
-        except Exception as err:  # noqa: BLE001
-            logger.warning("Unable to read %s – %r", path, err)
+        hdr = _read_header(path)
+        if hdr is None:
             continue
 
         if poly.intersects(box(hdr.mins[0], hdr.mins[1], hdr.maxs[0], hdr.maxs[1])):
@@ -37,11 +45,11 @@ def filter_las_by_bbox(
 
     if dst_dir:
         dst_dir.mkdir(parents=True, exist_ok=True)
-        out = []
+        copied: list[Path] = []
         for src in selected:
             tgt = dst_dir / src.name
             tgt.write_bytes(src.read_bytes())
-            out.append(tgt)
-        return out
+            copied.append(tgt)
+        return copied
 
     return selected

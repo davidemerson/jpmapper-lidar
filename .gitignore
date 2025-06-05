@@ -1,0 +1,5 @@
+*.las
+*.DS_Store
+*.pyc
+__pycache__/
+jpmapper.egg-info/

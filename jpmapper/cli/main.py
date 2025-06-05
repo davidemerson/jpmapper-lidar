@@ -19,33 +19,41 @@ logger = logging.getLogger(__name__)
 # time low when users only need a single operation.
 # ---------------------------------------------------------------------------
 app = typer.Typer(
-    help="JPMapper CLI – LiDAR filtering, rasterisation, and link‑analysis toolkit.",
+    help=(
+        "JPMapper CLI – LiDAR filtering, rasterization, and link‑analysis "
+        "toolkit. Use sub‑commands like `jpmapper filter`, `jpmapper rasterize`, "
+        "and (soon) `jpmapper analyze`."
+    ),
     add_help_option=True,
 )
 
 
 def _lazy(module: str):  # helper to defer heavy imports
+    """Import *module* only when its command is first invoked."""
     return importlib.import_module(module)
 
 
 @app.callback(invoke_without_command=True)
 def _root(ctx: typer.Context):  # noqa: D401
-    """Display help when invoked without a sub‑command."""
+    """Show help when invoked without a sub‑command."""
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
 
 
 # ---------------------------------------------------------------------------
-# Sub‑commands – currently only *filter*; rasterise/analyse coming next
+# Sub‑commands
 # ---------------------------------------------------------------------------
-app.add_typer(
-    _lazy("jpmapper.cli.filter").app,
-    name="filter",
-    help="Filter LAS/LAZ tiles by bounding box",
-)
+# Filter LAS/LAZ tiles by bounding box
+a = _lazy("jpmapper.cli.filter").app  # noqa: N816 – single‑letter alias
+app.add_typer(a, name="filter", help=getattr(a, "info", {}).help if hasattr(a, "info") else None)
+
+# Rasterize command (only tile sub‑command right now)
+try:
+    r = _lazy("jpmapper.cli.rasterize").app  # noqa: N816
+    app.add_typer(r, name="rasterize", help=getattr(r, "info", {}).help if hasattr(r, "info") else None)
+except ModuleNotFoundError:  # rasterize module not yet implemented
+    logger.debug("rasterize CLI not available yet – skipped")
 
 
 if __name__ == "__main__":  # pragma: no cover
     app()
-```python
-"""CLI sub‑package exposed via *typer*."""
