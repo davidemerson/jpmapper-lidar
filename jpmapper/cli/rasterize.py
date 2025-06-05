@@ -13,10 +13,17 @@ app = typer.Typer(help="Rasterize LAS/LAZ to DSM GeoTIFF tiles.")
 @app.command("tile", help="Rasterize a single LAS/LAZ tile.")
 def tile_command(
     src: Path = typer.Argument(..., exists=True, readable=True, help="Source LAS/LAZ file"),
-    dst: Path = typer.Argument(..., help="Destination GeoTIFF file (will be overwritten)"),
-    epsg: int = typer.Option(6539, help="EPSG code for output CRS (default: 6539 – NAD83 / NY Long Island)"),
-    resolution: float = typer.Option(1.0, help="Cell size in metres (default: 1.0)"),
+    dst: Path = typer.Argument(..., help="Destination GeoTIFF file (overwritten if exists)"),
+    epsg: int | None = typer.Option(
+        None,
+        "--epsg",
+        help="EPSG code for output CRS. If omitted, CRS is auto-detected from LAS header.",
+    ),
+    resolution: float = typer.Option(
+        0.1,
+        "--resolution",
+        help="Cell size in metres (default: 0.1 m)",
+    ),
 ):
     """CLI wrapper around :pyfunc:`jpmapper.io.raster.rasterize_tile`."""
-
     rasterize_tile(src, dst, epsg, resolution=resolution)
