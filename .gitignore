@@ -3,3 +3,5 @@
 *.pyc
 __pycache__/
 jpmapper.egg-info/
+*.tif
+*.tmp
