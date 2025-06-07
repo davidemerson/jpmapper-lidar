@@ -1,63 +1,64 @@
 """
-`jpmapper analyze` – batch line-of-sight / Fresnel analysis for point pairs.
-
-Usage example
--------------
-jpmapper analyze csv tests/data/points.csv \
-        --las-dir tests/data/las \
-        --json report.json \
-        --map-html report.html
+jpmapper analyze – point-to-point link analysis on LiDAR DSM
 """
+
 from __future__ import annotations
 
 import csv
 import json
+import logging
+import statistics
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Iterator, List, Tuple
 
+import numpy as np
 import typer
 from rich.table import Table
-from rich.text import Text
 
-from jpmapper.logging import console
-from jpmapper.analysis.los import is_clear
+from jpmapper.analysis.los import is_clear, profile
 from jpmapper.io import raster as r
+from jpmapper.logging import console, setup as _setup_logging
 
-app = typer.Typer(add_help_option=True, no_args_is_help=True)
+try:
+    import folium
+except ModuleNotFoundError:  # --map-html is optional
+    folium = None
 
+logger = logging.getLogger(__name__)
+_setup_logging()
 
-# --------------------------------------------------------------------------- #
-# Internal helpers
-# --------------------------------------------------------------------------- #
-def _dsm_linear_unit(crs) -> str:
-    # Returns e.g. "ftus" or "metre"
-    return crs.axis_info[0].unit_name.lower().replace(" ", "")
-
-
-def _convert_to_raster_units(metres: float, units: str) -> float:
-    """Convert *metres* to the DSM's linear units."""
-    if units in ("m", "metre", "meter"):
-        return metres
-    # US-survey-ft is 0.304800609601 m
-    if units in ("us_survey_foot", "usfoot", "ftus", "foot_us"):
-        return metres / 0.304800609601
-    raise ValueError(f"Unknown linear unit {units!r}")
+app = typer.Typer(
+    help="Analyse a CSV of point-to-point links against a first-return DSM.",
+    add_help_option=True,
+)
 
 
-def _build_dsm(
-    las_dir: Path,
-    epsg: int,
-    res_m: float,
-    cache: Path,
-) -> Tuple[Path, str]:
-    """Build (or load cached) first-return DSM mosaic and return path + units."""
-    crs = r._crs_for_epsg(epsg)
+# ---------------------------------------------------------------------------#
+# Helpers
+# ---------------------------------------------------------------------------#
+def _convert_to_raster_units(value_m: float, units: str) -> float:
+    """Metres → native DSM linear unit (ftus or metre)."""
+    if units.lower() in {"metre", "meter", "m"}:
+        return value_m
+    if units.lower() in {"ftus", "us_survey_foot", "us-ft"}:
+        return value_m / 0.3048006096012192
+    raise ValueError(f"Unknown unit {units!r}")
+
+
+def _dsm_linear_unit(crs) -> str:  # CRS can be pyproj or rasterio CRS
+    unit = crs.axis_info[0].unit_name.lower()
+    return "ftus" if "foot" in unit else "m"
+
+
+def _build_dsm(las_dir: Path, epsg: int, res_m: float, cache: Path) -> Tuple[Path, str]:
+    """Build (or load) first-return DSM mosaic. Returns (path, linear_unit)."""
+    crs = r.crs_for_epsg(epsg)
     units = _dsm_linear_unit(crs)
     res_native = _convert_to_raster_units(res_m, units)
 
     dsm_path = r.cached_mosaic(
-        las_dir=las_dir,
-        cache=cache,
+        las_dir,
+        cache,
         epsg=epsg,
         resolution=res_native,
         first_return=True,
@@ -65,98 +66,141 @@ def _build_dsm(
     return dsm_path, units
 
 
-def _rich_table() -> Table:
-    tbl = Table(title="Link Analysis")
-    tbl.add_column("Idx", justify="right")
-    tbl.add_column("Clear", justify="center")
-    tbl.add_column("Mast(m)", justify="right")
-    tbl.add_column("ClrMin(m)", justify="right")
-    tbl.add_column("WorstOff(m)", justify="right")
-    tbl.add_column("Samples", justify="right")
-    tbl.add_column("Aground", justify="right")
-    tbl.add_column("Bground", justify="right")
-    tbl.add_column("Snap(m)", justify="right")
-    return tbl
+def _write_json(rows: List[dict], out: Path) -> None:
+    with out.open("w", encoding="utf-8") as fh:
+        json.dump(rows, fh, indent=2)
+    console.print(f"[green]JSON written → {out}[/green]")
 
 
-# --------------------------------------------------------------------------- #
-# CSV sub-command
-# --------------------------------------------------------------------------- #
-@app.command("csv", help="Analyse every row in a CSV of point pairs.")
+def _write_map_html(records: List[dict], bounds: Tuple[Tuple[float, float], ...], out: Path) -> None:
+    if folium is None:
+        console.print("[red]folium not installed – skipping HTML map[/red]")
+        return
+
+    # bbox → map centre
+    lats = [lat for lat, lon in bounds]
+    lons = [lon for lat, lon in bounds]
+    m = folium.Map(location=[statistics.mean(lats), statistics.mean(lons)], zoom_start=12)
+
+    folium.Polygon(locations=bounds, color="blue", weight=2, fill=False).add_to(m)
+
+    for rec in records:
+        if rec["Clear"] == "NA":
+            colour = "gray"
+        elif rec["Clear"]:
+            colour = "green"
+        else:
+            colour = "red"
+        folium.PolyLine(
+            [rec["A"], rec["B"]],
+            color=colour,
+            tooltip=f"#{rec['Idx']} {rec['Mast(m)']} m",
+        ).add_to(m)
+
+    m.save(out)
+    console.print(f"[green]HTML map written → {out}[/green]")
+
+
+# ---------------------------------------------------------------------------#
+# CLI command
+# ---------------------------------------------------------------------------#
+@app.command("csv")
 def analyze_csv(
-    points_csv: Path = typer.Argument(..., exists=True, readable=True),
-    *,
-    las_dir: Path = typer.Option(..., exists=True, file_okay=False),
-    epsg: int = typer.Option(6539, help="EPSG code for LAS data / DSM"),
-    res: float = typer.Option(0.1, help="Desired cell size in **metres**"),
-    max_mast: int = typer.Option(5, help="Maximum mast height to try (m)"),
-    json_out: Path | None = typer.Option(
-        None, "--json", help="Write results as JSON list to this file"
-    ),
-    map_html: Path | None = typer.Option(
-        None, "--map-html", help="Create an interactive Leaflet map"
-    ),
+    points_csv: Path = typer.Argument(..., exists=True, readable=True, help="CSV with point pairs"),
+    las_dir: Path = typer.Option(..., exists=True, file_okay=False, help="Directory containing LAS/LAZ tiles"),
+    epsg: int = typer.Option(6539, help="Target EPSG (default NYC Long-Island ftUS)"),
+    res: float = typer.Option(0.10, help="Desired DSM resolution (metres)"),
+    max_mast: int = typer.Option(5, help="Maximum mast height to test (metres)"),
+    step: int = typer.Option(1, help="Mast-height step (metres)"),
+    json_out: Path | None = typer.Option(None, help="Write raw results to JSON"),
+    map_html: Path | None = typer.Option(None, help="Write interactive map (requires folium)"),
 ) -> None:
-    # --------------------------------------------------------------------- build/load DSM
+    """Analyse every row in the CSV and print a Rich summary table."""
+
+    # ------------------------------------------------------------------ DSM
     cache = las_dir.parent / "first_return_dsm.tif"
     console.print("[yellow]Building / loading first-return DSM…[/yellow]")
     dsm_path, units = _build_dsm(las_dir, epsg, res, cache)
     console.print(f"[cyan]DSM ready – units: {units.upper()} (EPSG {epsg})[/cyan]")
 
-    # --------------------------------------------------------------------- iterate rows
-    tbl = _rich_table()
-    records: List[Dict[str, Any]] = []
+    # ------------------------------------------------------------------ Table set-up
+    table = Table(title="Link Analysis", show_lines=True)
+    cols = [
+        "Idx",
+        "Clear",
+        "Mast(m)",
+        "ClrMin(m)",
+        "WorstOff(m)",
+        "Samples",
+        "Aground",
+        "Bground",
+        "Snap(m)",
+    ]
+    for c in cols:
+        table.add_column(c, justify="right")
 
-    with points_csv.open(newline="") as fh, r.open_dsm(dsm_path) as ds:
+    records: List[dict] = []
+    # ------------------------------------------------------------------ Iterate CSV
+    with points_csv.open() as fh, r.open_read(dsm_path) as ds:
         for idx, row in enumerate(csv.DictReader(fh), 1):
-            a = (float(row["point_a_lat"]), float(row["point_a_lon"]))
-            b = (float(row["point_b_lat"]), float(row["point_b_lon"]))
-            f_ghz = float(row.get("frequency_ghz", 5.8))
+            pt_a = float(row["point_a_lat"]), float(row["point_a_lon"])
+            pt_b = float(row["point_b_lat"]), float(row["point_b_lon"])
+            freq = float(row.get("frequency_ghz", 5.8))
 
             try:
-                clear, mast, clr_min, worst_off, n, g_a, g_b, snap = is_clear(
-                    ds, a, b, f_ghz, max_height_m=max_mast
+                result, mast, gA, gB, snap_d = is_clear(
+                    dsm_path,
+                    pt_a,
+                    pt_b,
+                    freq_ghz=freq,
+                    max_height_m=max_mast,
+                    step_m=step,
                 )
-                colour = "green" if clear else "red"
-                tbl.add_row(
-                    f"{idx}", Text("✔" if clear else "✘", style=colour),
-                    f"{mast:+.1f}", f"{clr_min:.1f}", f"{worst_off:+.1f}",
-                    str(n), f"{g_a:.1f}", f"{g_b:.1f}", f"{snap:.1f}"
-                )
-            except r.PointOutOfBounds as exc:
-                # Off-DSM ➜ warn & mark N/A
-                console.print(
-                    f"[yellow]Row {idx}: {exc} – skipping (outside DSM)[/yellow]"
-                )
-                tbl.add_row(f"{idx}", "NA", *["-"] * 7)
-                clear = False
-                mast = clr_min = worst_off = n = g_a = g_b = snap = None
+                # profile() is relatively cheap – only run if we already have DSM open
+                dist, ground, fresnel, *_ = profile(dsm_path, pt_a, pt_b, 256, freq)
 
+                worst_off = float(np.nanmax(ground - fresnel))
+                clr_min = float(np.nanmin(fresnel - ground))
+                samples = len(ground)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Error processing row %d: %s", idx, exc)
+                result = "NA"
+                mast = clr_min = worst_off = samples = gA = gB = snap_d = "-"
+            # ------------------- accumulate
             records.append(
-                dict(
-                    idx=idx,
-                    point_a=a,
-                    point_b=b,
-                    freq_ghz=f_ghz,
-                    clear=clear,
-                    mast_m=mast,
-                    clearance_min_m=clr_min,
-                    worst_obstruction_m=worst_off,
-                    samples=n,
-                    ground_a_m=g_a,
-                    ground_b_m=g_b,
-                    snap_m=snap,
-                )
+                {
+                    "Idx": idx,
+                    "Clear": result,
+                    "Mast(m)": mast,
+                    "ClrMin(m)": clr_min,
+                    "WorstOff(m)": worst_off,
+                    "Samples": samples,
+                    "Aground": gA,
+                    "Bground": gB,
+                    "Snap(m)": snap_d,
+                    "A": pt_a,
+                    "B": pt_b,
+                }
+            )
+            table.add_row(
+                str(idx),
+                str(result),
+                f"{mast:.0f}" if isinstance(mast, (int, float)) else str(mast),
+                f"{clr_min:.1f}" if isinstance(clr_min, (int, float)) else str(clr_min),
+                f"{worst_off:.1f}" if isinstance(worst_off, (int, float)) else str(worst_off),
+                str(samples),
+                f"{gA:.1f}" if isinstance(gA, (int, float)) else str(gA),
+                f"{gB:.1f}" if isinstance(gB, (int, float)) else str(gB),
+                f"{snap_d:.1f}" if isinstance(snap_d, (int, float)) else str(snap_d),
             )
 
-    # --------------------------------------------------------------------- output
-    console.print(tbl)
+    console.print(table)
 
+    # ------------------------------------------------------------------ outputs
     if json_out:
-        json_out.write_text(json.dumps(records, indent=2))
-        console.print(f"[green]JSON written → {json_out}[/green]")
+        _write_json(records, json_out)
 
     if map_html:
-        from jpmapper.reporting.map import write_map  # lazy import
-        write_map(records, dsm_path, map_html)
-        console.print(f"[green]Map written → {map_html}[/green]")
+        # DSM bounds polygon in WGS84
+        bounds = r.dsm_bounds_latlon(dsm_path)
+        _write_map_html(records, bounds, map_html)

@@ -1,34 +1,27 @@
 [project]
 name = "jpmapper"
-description = "LiDAR/DSM based link-analysis toolkit"
 version = "0.1.0"
-authors = [
-  { name = "David Emerson", email = "d@nnix.com" }
-]
-requires-python = ">=3.10"
+description = "LiDAR filtering, rasterisation, and link-analysis toolkit"
+authors = [{ name = "Your Name" }]
+readme = "README.md"
+requires-python = ">=3.9"
 
 dependencies = [
-  "typer[all]>=0.12",
-  "rasterio>=1.3,<1.5",
-  "laspy>=2.5",
-  "shapely>=2.0",
-  "pdal>=3.0",
-  "pyproj>=3.6",
-  "rich>=13.7"
-]
-
-[project.optional-dependencies]
-dev = [
-  "pytest",
-  "pytest-cov",
-  "ruff",
-  "mypy",
-  "pre-commit"
+    # core
+    "numpy>=1.24",
+    "rasterio>=1.3",
+    "rich>=13.0",
+    "typer[all]>=0.9",
+    "pandas>=2.0",
+    "shapely>=2.0",
+    "pdal>=3.0",     # PDAL Python bindings
+    # analysis / visualisation
+    "folium>=0.16",  # optional but included for --map-html
 ]
 
 [project.scripts]
 jpmapper = "jpmapper.cli.main:app"
 
-# Tell setuptools to ship only the real package, not the legacy “old/” folder
-[tool.setuptools]
-packages = ["jpmapper"]
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
