@@ -9,47 +9,51 @@ import typer
 from jpmapper.logging import setup as _setup_logging
 
 # ---------------------------------------------------------------------------
-# Initialise global logging ASAP
+# Initialise global logging as early as possible
 # ---------------------------------------------------------------------------
 _setup_logging()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Root Typer application
+# Typer root application
 # ---------------------------------------------------------------------------
 app = typer.Typer(
     help=(
-        "JPMapper CLI – LiDAR filtering, rasterization and link-analysis toolkit.\n\n"
-        "Sub-commands:\n"
-        "  • jpmapper filter      – clip LAS/LAZ tiles by bounding-box\n"
-        "  • jpmapper rasterize   – first-return DSM generation\n"
-        "  • jpmapper analyze     – LOS/Fresnel analysis for point-to-point links"
+        "JPMapper CLI – LiDAR filtering, rasterisation and link-analysis toolkit.  "
+        "Use sub-commands such as `jpmapper filter`, `jpmapper rasterize`, "
+        "`jpmapper analyze`, …"
     ),
     add_help_option=True,
 )
 
-
-def _lazy(module: str):  # helper to defer heavy imports
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _lazy(module: str):  # defer heavy imports until the sub-command is invoked
     return importlib.import_module(module)
 
 
 @app.callback(invoke_without_command=True)
-def _root(ctx: typer.Context) -> None:  # noqa: D401
+def _root(ctx: typer.Context):  # noqa: D401
     """Show help when invoked without a sub-command."""
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
 
 
 # ---------------------------------------------------------------------------
-# Register sub-commands – attached lazily so the CLI stays snappy
+# Sub-commands  –  attach lazily so import-time stays fast
 # ---------------------------------------------------------------------------
-for name in ("filter", "rasterize", "analyze"):
+for _name in ("filter", "rasterize", "analyze"):
     try:
-        mod = _lazy(f"jpmapper.cli.{name}")
-        app.add_typer(mod.app, name=name, help=mod.app.info.help)
+        mod = _lazy(f"jpmapper.cli.{_name}")
+        app.add_typer(
+            mod.app,
+            name=_name,
+            help=getattr(mod.app, "info", {}).help if hasattr(mod.app, "info") else None,
+        )
     except ModuleNotFoundError:
-        logger.warning("%s CLI not found – did you add jpmapper/cli/%s.py?", name, name)
-
+        logger.warning("%s CLI not found – did you add jpmapper/cli/%s.py?", _name, _name)
+        continue
 
 if __name__ == "__main__":  # pragma: no cover
     app()

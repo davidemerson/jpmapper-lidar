@@ -1,49 +1,95 @@
-"""Centralized logging setup using *rich* for pretty CLI output and JSON option."""
+"""
+Package-wide logging helpers for JPMapper.
+
+Importing this module sets up Rich-style logging immediately, *and* exposes
+a shared `console` instance that the rest of the codebase can use for pretty
+terminal output.
+"""
 from __future__ import annotations
 
-import json
 import logging
-import os
-from datetime import datetime
-from typing import Final
+import sys
+from pathlib import Path
+from typing import Literal, overload
 
 from rich.console import Console
 from rich.logging import RichHandler
 
-_JSON_ENV: Final[str] = "JPMAPPER_LOG_JSON"
+__all__ = ["console", "setup"]
 
-DEFAULT_LEVEL = logging.INFO
+# --------------------------------------------------------------------------- #
+# A single Rich console for the whole project
+# --------------------------------------------------------------------------- #
+console = Console()
 
-
-def _build_rich_handler() -> RichHandler:  # pretty coloured output
-    return RichHandler(rich_tracebacks=True, show_path=False)
-
-
-def _build_json_handler() -> logging.Handler:  # machine‑readable logs
-    class _JSON(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:  # noqa: D401
-            log = {
-                "ts": datetime.utcnow().isoformat() + "Z",
-                "level": record.levelname,
-                "msg": record.getMessage(),
-                "logger": record.name,
-            }
-            print(json.dumps(log, separators=(",", ":")))
-
-    return _JSON()
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
 
 
-def setup() -> None:
-    """Initialise root logger once; idempotent."""
-    root = logging.getLogger()
-    if root.handlers:
-        return  # Already configured
+@overload
+def setup(
+    level: int | str = "INFO",
+    *,
+    logfile: str | Path | None = None,
+    force: bool = False,
+) -> None: ...
+@overload
+def setup(
+    level: Literal[10, 20, 30, 40, 50] = 20,
+    *,
+    logfile: str | Path | None = None,
+    force: bool = False,
+) -> None: ...
+def setup(  # type: ignore[override]
+    level: int | str = "INFO",
+    *,
+    logfile: str | Path | None = None,
+    force: bool = False,
+) -> None:
+    """
+    Initialise Rich logging.
 
-    json_mode = os.getenv(_JSON_ENV, "0") in {"1", "true", "yes"}
-    handler: logging.Handler = _build_json_handler() if json_mode else _build_rich_handler()
+    Parameters
+    ----------
+    level
+        Log-level name or numeric value (default ``"INFO"``).
+    logfile
+        Optional path – if given, adds a rotating file handler alongside Rich.
+    force
+        When running inside e.g. pytest (which configures logging itself) set
+        ``force=True`` so our config replaces the existing root handlers.
+    """
+    if isinstance(level, str):
+        level = logging.getLevelName(level.upper())
+
+    # Rich handler for colourful terminal logs
+    handlers: list[logging.Handler] = [
+        RichHandler(
+            console=console,
+            rich_tracebacks=True,
+            markup=False,
+            show_path=False,
+            log_time_format="[%d/%m/%y %H:%M:%S]",
+        )
+    ]
+
+    # Optional plain-text file log
+    if logfile is not None:
+        fh = logging.handlers.RotatingFileHandler(
+            logfile, mode="a", maxBytes=2**20, backupCount=3, encoding="utf-8"
+        )
+        fmt_file = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        fh.setFormatter(logging.Formatter(fmt_file, datefmt="%Y-%m-%d %H:%M:%S"))
+        handlers.append(fh)
 
     logging.basicConfig(
-        level=DEFAULT_LEVEL,
-        format="%(message)s",  # actual formatting done by handler
-        handlers=[handler],
+        level=level,
+        format="%(message)s",  # Rich formats the record itself
+        handlers=handlers,
+        force=force,
     )
+
+
+# Initialise at import time so `import jpmapper.logging` is enough
+setup()

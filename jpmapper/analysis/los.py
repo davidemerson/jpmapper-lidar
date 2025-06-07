@@ -1,183 +1,129 @@
-"""Line-of-sight & Fresnel-zone utilities."""
+"""
+Core LOS / Fresnel functions.
+
+Returned tuple from `is_clear`:
+    clear (bool)
+    mast_height_m (int | -1)
+    clr_min_m (float)
+    worst_overshoot_m (float)
+    n_samples (int)
+    ground_A_m (float)
+    ground_B_m (float)
+    snap_distance_m (float)
+"""
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Tuple
 
 import numpy as np
-import rasterio as rio
+import rasterio
 from pyproj import Transformer
 
-
-# ────────────────────────────────────────────────────────────────────────────────
-@dataclass
-class OutOfBounds(Exception):  # raised when a point is outside the DSM extent
-    distance_m: float
+# --------------------------------------------------------------------------- geometry helpers
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance (metres) between two WGS84 lat/lon points."""
-    R = 6371000.0
-    φ1, φ2 = math.radians(lat1), math.radians(lat2)
-    dφ = φ2 - φ1
-    dλ = math.radians(lon2 - lon1)
-    a = math.sin(dφ / 2) ** 2 + math.cos(φ1) * math.cos(φ2) * math.sin(dλ / 2) ** 2
-    return 2 * R * math.asin(math.sqrt(a))
+def _first_fresnel_radius(dist: np.ndarray, freq_ghz: float) -> np.ndarray:
+    wavelength = 0.3 / freq_ghz  # λ = c / f
+    return np.sqrt(wavelength * dist / 2.0)
 
 
-def _dsm_bbox_wgs84(ds: rio.DatasetReader) -> Tuple[float, float, float, float]:
-    """Return DSM bounds in WGS84 (lon_min, lat_min, lon_max, lat_max)."""
-    tf = Transformer.from_crs(ds.crs, 4326, always_xy=True)
-    left, bottom, right, top = ds.bounds
-    lon_min, lat_min = tf.transform(left, bottom)
-    lon_max, lat_max = tf.transform(right, top)
-    return lon_min, lat_min, lon_max, lat_max
-
-
-def _distance_to_bbox(
-    lon: float,
-    lat: float,
-    bbox: Tuple[float, float, float, float],
-) -> float:
-    """Shortest haversine distance (metres) from point to bounding box."""
-    lon_min, lat_min, lon_max, lat_max = bbox
-    # Clip point to bbox to find nearest edge / corner
-    lon_clamped = max(min(lon, lon_max), lon_min)
-    lat_clamped = max(min(lat, lat_max), lat_min)
-    return _haversine(lat, lon, lat_clamped, lon_clamped)
-
-
-# ────────────────────────────────────────────────────────────────────────────────
 def _snap_to_valid(
-    ds: rio.DatasetReader,
-    lon: float,
-    lat: float,
-    max_px: int = 3,
-) -> Tuple[Tuple[float, float], float]:
-    """
-    Snap WGS84 lon/lat to nearest DSM pixel with data.
-    Raises OutOfBounds if nothing within *max_px*.
-    """
-    tf_fwd = Transformer.from_crs(4326, ds.crs, always_xy=True)
-    tf_inv = Transformer.from_crs(ds.crs, 4326, always_xy=True)
+    ds: rasterio.DatasetReader, lon: float, lat: float, max_px: int = 5
+) -> Tuple[Tuple[float, float], float, float]:
+    """Snap WGS84 lon/lat to nearest valid DSM cell.
 
-    x, y = tf_fwd.transform(lon, lat)
-    col = int((x - ds.transform.c) / ds.transform.a + 0.5)
-    row = int((y - ds.transform.f) / ds.transform.e + 0.5)
+    Returns:
+      * snapped (lat, lon)
+      * ground elevation (m, in DSM units)
+      * horizontal distance (m) between requested and snapped point
+    """
+    tf_wgs84_to_dsm = Transformer.from_crs(4326, ds.crs, always_xy=True)
+    tf_dsm_to_wgs84 = Transformer.from_crs(ds.crs, 4326, always_xy=True)
+
+    x, y = tf_wgs84_to_dsm.transform(lon, lat)
+    col = int(round((x - ds.transform.c) / ds.transform.a))
+    row = int(round((y - ds.transform.f) / ds.transform.e))
 
     nodata = ds.nodata if ds.nodata is not None else -9999
     for d in range(max_px + 1):
-        rmin, rmax = row - d, row + d
-        cmin, cmax = col - d, col + d
-        window = ds.read(1, window=((rmin, rmax + 1), (cmin, cmax + 1)))
+        window = ds.read(
+            1,
+            window=((row - d, row + d + 1), (col - d, col + d + 1)),
+            boundless=True,
+            fill_value=nodata,
+        )
         mask = window != nodata
         if mask.any():
             r_off, c_off = np.argwhere(mask)[0]
-            r_valid, c_valid = rmin + r_off, cmin + c_off
-            x_val = ds.transform.c + c_valid * ds.transform.a
-            y_val = ds.transform.f + r_valid * ds.transform.e
-            lon_val, lat_val = tf_inv.transform(x_val, y_val)
+            r_valid, c_valid = row - d + r_off, col - d + c_off
+            x_valid = ds.transform.c + c_valid * ds.transform.a
+            y_valid = ds.transform.f + r_valid * ds.transform.e
+            lon_valid, lat_valid = tf_dsm_to_wgs84.transform(x_valid, y_valid)
             elev = float(
-                ds.read(1, window=((r_valid, r_valid + 1), (c_valid, c_valid + 1)))[
-                    0, 0
-                ]
+                ds.read(
+                    1,
+                    window=((r_valid, r_valid + 1), (c_valid, c_valid + 1)),
+                    boundless=True,
+                    fill_value=nodata,
+                )[0, 0]
             )
-            return (lat_val, lon_val), elev
-
-    # Nothing found – compute distance to bbox and raise
-    bbox = _dsm_bbox_wgs84(ds)
-    raise OutOfBounds(_distance_to_bbox(lon, lat, bbox))
+            dx = math.hypot(lon_valid - lon, lat_valid - lat) * 111_320  # ~ m per deg
+            return (lat_valid, lon_valid), elev, dx
+    raise ValueError("No valid DSM cell within search radius")
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-def first_fresnel_radius(distance_m: float, freq_ghz: float) -> np.ndarray:
-    lam = 0.3 / freq_ghz  # metres
-    return np.sqrt(lam * distance_m / 2)
+# --------------------------------------------------------------------------- public API
 
 
-def profile(
-    ds: rio.DatasetReader,
+def is_clear(
+    ds: rasterio.DatasetReader,
     pt_a: Tuple[float, float],
     pt_b: Tuple[float, float],
-    samples: int,
-    freq_ghz: float,
-):
-    tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
-    try:
-        (lat_a, lon_a), ground_a = _snap_to_valid(ds, pt_a[1], pt_a[0])
-        (lat_b, lon_b), ground_b = _snap_to_valid(ds, pt_b[1], pt_b[0])
-    except OutOfBounds as err:
-        raise  # re-raise for caller
-
-    x0, y0 = tf.transform(lon_a, lat_a)
-    x1, y1 = tf.transform(lon_b, lat_b)
-
-    xs = np.linspace(x0, x1, samples)
-    ys = np.linspace(y0, y1, samples)
-    rows, cols = ~ds.transform * np.vstack([xs, ys])
-    rows = rows.astype(int)
-    cols = cols.astype(int)
-
-    terrain = ds.read(1)[rows, cols]
-    dist = np.linspace(0, _haversine(lat_a, lon_a, lat_b, lon_b), samples)
-
-    fresnel = first_fresnel_radius(dist, freq_ghz)
-    return dist, terrain, fresnel, ground_a, ground_b
-
-
-# ────────────────────────────────────────────────────────────────────────────────
-def analyze_link(
-    ds: rio.DatasetReader,
-    pt_a: Tuple[float, float],
-    pt_b: Tuple[float, float],
-    freq_ghz: float,
     *,
-    max_height_m: int,
-    raster_units: str,
-) -> Dict:
+    freq_ghz: float = 5.8,
+    max_height_m: int = 5,
+    n_samples: int = 256,
+) -> Tuple[bool, int, float, float, int, float, float, float]:
     """
-    Return a dict with link metrics.  If either endpoint is outside
-    DSM extent, 'coverage' is False and 'oob_m' gives the distance.
-    """
-    n_samples = 512
-    try:
-        dist, terrain, fresnel, gA, gB = profile(ds, pt_a, pt_b, n_samples, freq_ghz)
-    except OutOfBounds as e:
-        return {
-            "coverage": False,
-            "oob_m": round(e.distance_m, 1),
-        }
+    Return whether path is clear.  If not clear at ground level, try mast
+    heights (1 m … max_height_m) at **both** ends until clear.
 
-    # Add antenna heights progressively
-    for mast in range(max_height_m + 1):
-        tx = gA + mast
-        rx = gB + mast
-        los = tx + (dist / dist[-1]) * (rx - tx)
-        clearance = los - terrain
-        off = fresnel - clearance
-        if off.max() <= 0:  # clear
-            return {
-                "coverage": True,
-                "clear": True,
-                "mast_height_m": mast,
-                "min_clearance_m": clearance.min(),
-                "worst_offset_m": off.max(),
-                "samples": int(n_samples),
-                "ground_a_m": gA,
-                "ground_b_m": gB,
-                "snap_distance_m": 0.0,
-            }
-    # not clear
-    return {
-        "coverage": True,
-        "clear": False,
-        "mast_height_m": -1,
-        "min_clearance_m": clearance.min(),
-        "worst_offset_m": off.max(),
-        "samples": int(n_samples),
-        "ground_a_m": gA,
-        "ground_b_m": gB,
-        "snap_distance_m": 0.0,
-    }
+    Returns *(clear, mast_height_m, clr_min, worst_overshoot, n_samples,
+    groundA, groundB, snap_distance)*.
+    """
+    (lat_a, lon_a), gA, snapA = _snap_to_valid(ds, pt_a[1], pt_a[0])
+    (lat_b, lon_b), gB, snapB = _snap_to_valid(ds, pt_b[1], pt_b[0])
+    snap = max(snapA, snapB)
+
+    # sample elevations
+    tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
+    x1, y1 = tf.transform(lon_a, lat_a)
+    x2, y2 = tf.transform(lon_b, lat_b)
+    xs = np.linspace(x1, x2, n_samples)
+    ys = np.linspace(y1, y2, n_samples)
+    zs = np.empty(n_samples, dtype=float)
+    ds.read(1, out=zs, samples=list(zip(xs, ys)), resampling=rasterio.enums.Resampling.nearest)
+    distance = np.linspace(0, math.hypot(x2 - x1, y2 - y1), n_samples)
+
+    fresnel = _first_fresnel_radius(distance, freq_ghz)
+
+    def _clear(h: float) -> Tuple[bool, float, float]:
+        z_tx = gA + h
+        z_rx = gB + h
+        z_link = z_tx + (z_rx - z_tx) * (distance / distance[-1])
+        clr = z_link - zs - fresnel
+        return bool((clr >= 0).all()), clr.min(), -clr.max()
+
+    # ground first
+    ok, clr_min, worst = _clear(0)
+    if ok:
+        return True, 0, clr_min, worst, n_samples, gA, gB, snap
+
+    # try masts
+    for h in range(1, max_height_m + 1):
+        ok, clr_min, worst = _clear(h)
+        if ok:
+            return True, h, clr_min, worst, n_samples, gA, gB, snap
+
+    return False, -1, clr_min, worst, n_samples, gA, gB, snap
