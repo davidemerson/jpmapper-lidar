@@ -83,14 +83,32 @@ def is_clear(
     *,
     freq_ghz: float = 5.8,
     max_height_m: int = 5,
+    step_m: int = 1,
     n_samples: int = 256,
 ) -> Tuple[bool, int, float, float, int, float, float, float]:
     """
     Return whether path is clear.  If not clear at ground level, try mast
-    heights (1 m … max_height_m) at **both** ends until clear.
+    heights (step_m, 2*step_m, ... max_height_m) at **both** ends until clear.
 
-    Returns *(clear, mast_height_m, clr_min, worst_overshoot, n_samples,
-    groundA, groundB, snap_distance)*.
+    Args:
+        ds: Raster dataset (DSM)
+        pt_a: First point as (latitude, longitude)
+        pt_b: Second point as (latitude, longitude)
+        freq_ghz: Frequency in GHz (default: 5.8 GHz)
+        max_height_m: Maximum mast height to test in meters
+        step_m: Step size for testing mast heights in meters
+        n_samples: Number of points to sample along the path
+
+    Returns:
+        Tuple containing:
+        - clear (bool): True if path is clear, False otherwise
+        - mast_height_m (int): Minimum mast height required for clearance (-1 if never clear)
+        - clr_min (float): Minimum clearance distance in meters
+        - worst_overshoot (float): Maximum intrusion into Fresnel zone in meters
+        - n_samples (int): Number of samples analyzed
+        - groundA (float): Ground elevation at point A in meters
+        - groundB (float): Ground elevation at point B in meters
+        - snap_distance (float): Distance to nearest valid DSM cell in meters
     """
     (lat_a, lon_a), gA, snapA = _snap_to_valid(ds, pt_a[1], pt_a[0])
     (lat_b, lon_b), gB, snapB = _snap_to_valid(ds, pt_b[1], pt_b[0])
@@ -118,12 +136,54 @@ def is_clear(
     # ground first
     ok, clr_min, worst = _clear(0)
     if ok:
-        return True, 0, clr_min, worst, n_samples, gA, gB, snap
-
-    # try masts
-    for h in range(1, max_height_m + 1):
+        return True, 0, clr_min, worst, n_samples, gA, gB, snap    # try masts
+    for h in range(step_m, max_height_m + 1, step_m):
         ok, clr_min, worst = _clear(h)
         if ok:
             return True, h, clr_min, worst, n_samples, gA, gB, snap
 
     return False, -1, clr_min, worst, n_samples, gA, gB, snap
+
+
+def profile(
+    ds: rasterio.DatasetReader,
+    pt_a: Tuple[float, float],
+    pt_b: Tuple[float, float],
+    n_samples: int = 256,
+    freq_ghz: float = 5.8,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Generate terrain and Fresnel zone profile between two points.
+    
+    Args:
+        ds: Raster dataset (DSM)
+        pt_a: First point as (latitude, longitude)
+        pt_b: Second point as (latitude, longitude)
+        n_samples: Number of points to sample along the path
+        freq_ghz: Frequency in GHz
+    
+    Returns:
+        Tuple containing:
+        - distances_m: Array of distances along the path in meters
+        - terrain_heights_m: Array of terrain heights in meters
+        - fresnel_radii_m: Array of Fresnel zone radii in meters
+    """
+    (lat_a, lon_a), gA, _ = _snap_to_valid(ds, pt_a[1], pt_a[0])
+    (lat_b, lon_b), gB, _ = _snap_to_valid(ds, pt_b[1], pt_b[0])
+    
+    # Sample elevations
+    tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
+    x1, y1 = tf.transform(lon_a, lat_a)
+    x2, y2 = tf.transform(lon_b, lat_b)
+    xs = np.linspace(x1, x2, n_samples)
+    ys = np.linspace(y1, y2, n_samples)
+    ground = np.empty(n_samples, dtype=float)
+    ds.read(1, out=ground, samples=list(zip(xs, ys)), resampling=rasterio.enums.Resampling.nearest)
+    
+    # Calculate distances
+    distance = np.linspace(0, math.hypot(x2 - x1, y2 - y1), n_samples)
+    
+    # Calculate Fresnel zone radius
+    fresnel = _first_fresnel_radius(distance, freq_ghz)
+    
+    return distance, ground, fresnel

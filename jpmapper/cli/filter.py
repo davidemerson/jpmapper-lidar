@@ -7,7 +7,7 @@ from pathlib import Path
 import typer
 
 from jpmapper import config as _config
-from jpmapper.io.las import filter_las_by_bbox
+from jpmapper.api import filter_by_bbox
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def bbox_command(
     bbox = cfg.bbox
 
     tiles = list(src.glob("*.la?[sz]"))
-    selected = filter_las_by_bbox(tiles, bbox=bbox, dst_dir=dst)
+    selected = filter_by_bbox(tiles, bbox=bbox, dst_dir=dst)
 
     typer.secho(
         f"Selected {len(selected)} of {len(tiles)} tiles inside bbox {bbox}",

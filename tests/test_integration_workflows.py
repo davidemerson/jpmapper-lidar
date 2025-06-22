@@ -1,0 +1,165 @@
+"""Integration tests for JPMapper workflows."""
+import os
+import json
+from pathlib import Path
+import pytest
+from unittest.mock import patch, MagicMock
+import numpy as np
+
+from jpmapper.api import filter_by_bbox, rasterize_tile, analyze_los, generate_profile
+from jpmapper.exceptions import (
+    JPMapperError, 
+    GeometryError, 
+    FilterError, 
+    RasterizationError, 
+    AnalysisError
+)
+
+
+@pytest.mark.integration
+class TestWorkflows:
+    """Test end-to-end workflows using mocks."""
+    
+    @pytest.fixture
+    def mock_raster_data(self):
+        """Create a mock DSM raster with a simple elevation profile."""
+        # Create a 10x10 array with elevation increasing from bottom-left to top-right
+        # This will simulate a hill or slope
+        data = np.zeros((10, 10), dtype=np.float32)
+        for i in range(10):
+            for j in range(10):
+                data[i, j] = i + j
+        return data
+    
+    @patch('jpmapper.io.las.filter_las_by_bbox')
+    def test_filter_workflow(self, mock_filter, tmp_path):
+        """Test the filter workflow from API to IO."""
+        # Setup mock files
+        mock_las_files = [Path(f"file{i}.las") for i in range(3)]
+        mock_result = [mock_las_files[0], mock_las_files[2]]
+        
+        # Setup mock to return two of the three files
+        mock_filter.return_value = mock_result
+        
+        # Call the API function
+        result = filter_by_bbox(
+            mock_las_files, 
+            bbox=(-74.01, 40.70, -73.96, 40.75),
+            dst_dir=tmp_path
+        )
+        
+        # Verify that the IO function was called with the correct arguments
+        mock_filter.assert_called_once_with(
+            mock_las_files, 
+            bbox=(-74.01, 40.70, -73.96, 40.75),
+            dst_dir=tmp_path
+        )
+        
+        # Verify that the result matches the mock result
+        assert result == mock_result
+    
+    @patch('jpmapper.io.raster.rasterize_tile')
+    def test_rasterize_workflow(self, mock_rasterize, tmp_path):
+        """Test the rasterize workflow from API to IO."""
+        # Setup mock files
+        src = tmp_path / "file.las"
+        dst = tmp_path / "file.tif"
+        
+        # Setup mock to return the destination file
+        mock_rasterize.return_value = dst
+        
+        # Call the API function
+        result = rasterize_tile(src, dst, epsg=6539, resolution=0.1)
+        
+        # Verify that the IO function was called with the correct arguments
+        mock_rasterize.assert_called_once_with(
+            src, dst, epsg=6539, resolution=0.1, workers=None
+        )
+        
+        # Verify that the result matches the mock result
+        assert result == dst
+    
+    @patch('rasterio.open')
+    @patch('jpmapper.analysis.los.is_clear')
+    def test_analyze_los_workflow(self, mock_is_clear, mock_rasterio_open, tmp_path, mock_raster_data):
+        """Test the analyze_los workflow from API to analysis."""
+        # Setup mock files
+        dsm_path = tmp_path / "dsm.tif"
+        dsm_path.touch()
+        
+        # Setup mock for rasterio.open
+        mock_dataset = MagicMock()
+        mock_dataset.transform = [0.1, 0, 0, 0, -0.1, 0, 0, 0, 1]
+        mock_dataset.crs.to_epsg.return_value = 6539
+        mock_rasterio_open.return_value.__enter__.return_value = mock_dataset
+        
+        # Setup mock for is_clear
+        mock_is_clear.return_value = (True, 0, 10, 15, 100)
+        
+        # Call the API function
+        result = analyze_los(
+            dsm_path,
+            (40.7128, -74.0060),
+            (40.7614, -73.9776),
+            freq_ghz=5.8
+        )
+        
+        # Verify that is_clear was called
+        mock_is_clear.assert_called_once()
+        
+        # Verify that the result contains the expected fields
+        assert "clear" in result
+        assert "mast_height_m" in result
+        assert "ground_height_a_m" in result
+        assert "ground_height_b_m" in result
+        assert "distance_m" in result
+        
+        # Verify that the result values match the mock values
+        assert result["clear"] is True
+        assert result["mast_height_m"] == 0
+        assert result["ground_height_a_m"] == 10
+        assert result["ground_height_b_m"] == 15
+        assert result["distance_m"] == 100
+    
+    @patch('rasterio.open')
+    @patch('jpmapper.analysis.los.compute_profile')
+    def test_generate_profile_workflow(self, mock_compute_profile, mock_rasterio_open, tmp_path, mock_raster_data):
+        """Test the generate_profile workflow from API to analysis."""
+        # Setup mock files
+        dsm_path = tmp_path / "dsm.tif"
+        dsm_path.touch()
+        
+        # Setup mock for rasterio.open
+        mock_dataset = MagicMock()
+        mock_dataset.transform = [0.1, 0, 0, 0, -0.1, 0, 0, 0, 1]
+        mock_dataset.crs.to_epsg.return_value = 6539
+        mock_rasterio_open.return_value.__enter__.return_value = mock_dataset
+        
+        # Setup mock for compute_profile
+        distances = np.linspace(0, 100, 10)
+        elevations = np.linspace(10, 20, 10) + np.sin(distances / 10) * 5
+        mock_compute_profile.return_value = (distances, elevations, 100)
+        
+        # Call the API function
+        result = generate_profile(
+            dsm_path,
+            (40.7128, -74.0060),
+            (40.7614, -73.9776),
+            freq_ghz=5.8,
+            n_samples=10
+        )
+        
+        # Verify that compute_profile was called
+        mock_compute_profile.assert_called_once()
+        
+        # Verify that the result contains the expected fields
+        assert "distances_m" in result
+        assert "elevations_m" in result
+        assert "total_distance_m" in result
+        assert "fresnel_radius_m" in result
+        
+        # Verify that the result values match the mock values
+        np.testing.assert_array_equal(result["distances_m"], distances)
+        np.testing.assert_array_equal(result["elevations_m"], elevations)
+        assert result["total_distance_m"] == 100
+        assert "fresnel_radius_m" in result

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import typer
 
-from jpmapper.io.raster import rasterize_tile
+from jpmapper.api import rasterize_tile
 
 app = typer.Typer(help="Rasterize LAS/LAZ to DSM GeoTIFF tiles.")
 

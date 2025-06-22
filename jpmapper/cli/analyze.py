@@ -9,13 +9,13 @@ import json
 import logging
 import statistics
 from pathlib import Path
-from typing import Iterator, List, Tuple
+from typing import Iterator, List, Tuple, Dict, Any
 
 import numpy as np
 import typer
 from rich.table import Table
 
-from jpmapper.analysis.los import is_clear, profile
+from jpmapper.api import analyze_los, generate_profile
 from jpmapper.io import raster as r
 from jpmapper.logging import console, setup as _setup_logging
 
@@ -134,11 +134,10 @@ def analyze_csv(
         "Samples",
         "Aground",
         "Bground",
-        "Snap(m)",
-    ]
+        "Snap(m)",    ]
     for c in cols:
         table.add_column(c, justify="right")
-
+        
     records: List[dict] = []
     # ------------------------------------------------------------------ Iterate CSV
     with points_csv.open() as fh, r.open_read(dsm_path) as ds:
@@ -146,18 +145,26 @@ def analyze_csv(
             pt_a = float(row["point_a_lat"]), float(row["point_a_lon"])
             pt_b = float(row["point_b_lat"]), float(row["point_b_lon"])
             freq = float(row.get("frequency_ghz", 5.8))
-
+            
             try:
-                result, mast, gA, gB, snap_d = is_clear(
+                # Use the new API
+                los_result = analyze_los(
                     dsm_path,
                     pt_a,
                     pt_b,
                     freq_ghz=freq,
-                    max_height_m=max_mast,
-                    step_m=step,
+                    max_mast_height_m=max_mast,
+                    mast_height_step_m=step,
                 )
+                
+                result = los_result["clear"]
+                mast = los_result["mast_height_m"]
+                gA = los_result["ground_a_m"]
+                gB = los_result["ground_b_m"]
+                snap_d = los_result["snap_distance_m"]
+                
                 # profile() is relatively cheap – only run if we already have DSM open
-                dist, ground, fresnel, *_ = profile(dsm_path, pt_a, pt_b, 256, freq)
+                dist, ground, fresnel = generate_profile(dsm_path, pt_a, pt_b, 256, freq)
 
                 worst_off = float(np.nanmax(ground - fresnel))
                 clr_min = float(np.nanmin(fresnel - ground))
