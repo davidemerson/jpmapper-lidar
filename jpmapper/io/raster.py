@@ -53,25 +53,68 @@ def _run_pdal(pdict: dict) -> None:
             tmp.write(json.dumps(pdict))
         subprocess.run(["pdal", "pipeline", tmp.name], check=True)
 
+# Export _run_pdal with a public name for testing
+run_pdal_pipeline = _run_pdal
+
+
 # ─────────────────────────── public API ─────────────────────────────────────────
 def rasterize_tile(
     src_las: Path,
     dst_tif: Path,
     epsg: int | None = None,
-    *,
     resolution: float = 0.1,
-) -> None:
-    """Rasterize *src_las* into *dst_tif* (first-return DSM, 0.1 m)."""
+    workers: int | None = None,
+) -> Path:
+    """
+    Rasterize a single LAS/LAZ file into a GeoTIFF DSM.
+    
+    Args:
+        src_las: Path to the source LAS/LAZ file
+        dst_tif: Path where the output GeoTIFF will be written
+        epsg: EPSG code for the output CRS. If None, auto-detects from LAS header.
+        resolution: Cell size in meters (default: 0.1m)
+        workers: Number of worker processes (unused, for API compatibility)
+        
+    Returns:
+        Path to the created GeoTIFF file
+        
+    Raises:
+        FileNotFoundError: If src_las does not exist
+        PermissionError: If dst_tif cannot be written due to permissions
+        ValueError: If resolution is not positive or if CRS cannot be determined
+        RasterizationError: If rasterization fails
+    """
+    from jpmapper.exceptions import RasterizationError
+    
+    # Check if source file exists
+    if not src_las.exists():
+        raise FileNotFoundError(f"Source LAS file does not exist: {src_las}")
+    
+    # Validate resolution
+    if resolution <= 0:
+        raise ValueError(f"Resolution must be positive: {resolution}")
+    
+    # Auto-detect EPSG if not provided
     if epsg is None:
-        with laspy.open(str(src_las)) as rdr:
-            crs = rdr.header.parse_crs()
-        if crs is None or crs.to_epsg() is None:
-            raise ValueError(f"No EPSG in {src_las}")
-        epsg = int(crs.to_epsg())
+        try:
+            with laspy.open(str(src_las)) as rdr:
+                crs = rdr.header.parse_crs()
+            if crs is None or crs.to_epsg() is None:
+                raise ValueError(f"No EPSG in {src_las}")
+            epsg = int(crs.to_epsg())
+        except Exception as e:
+            raise ValueError(f"Could not determine CRS from LAS header: {e}")
 
+    # Create destination directory if it doesn't exist
     dst_tif.parent.mkdir(parents=True, exist_ok=True)
-    _run_pdal(_pipeline_dict(src_las, dst_tif, epsg, resolution))
-    log.debug("Rasterized %s → %s", src_las.name, dst_tif.name)
+    
+    # Run the PDAL pipeline
+    try:
+        _run_pdal(_pipeline_dict(src_las, dst_tif, epsg, resolution))
+        log.debug("Rasterized %s → %s", src_las.name, dst_tif.name)
+        return dst_tif
+    except Exception as e:
+        raise RasterizationError(f"Failed to rasterize {src_las}: {e}") from e
 
 # ---------- parallel helper (Windows-safe) -------------------------------------
 def _rasterize_one(args: Tuple[Path, Path, int, float]) -> Path:

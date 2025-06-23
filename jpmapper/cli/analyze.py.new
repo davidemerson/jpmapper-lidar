@@ -74,12 +74,11 @@ def analyze_csv(
         points_csv,
         las_dir=las_dir,
         cache=cache,
+        json_out=json_out,
+        max_mast_height_m=max_mast_height_m,
         epsg=epsg, 
         resolution=resolution,
         workers=workers,
-        max_mast_height_m=max_mast_height_m,
-        output_format="json",
-        output_path=json_out if json_out else None
     )
     
     # Generate summary table if not just returning results

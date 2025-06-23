@@ -27,13 +27,12 @@ The recommended way to set up JPMapper is using Conda, which manages dependencie
    # Clone the repository
    git clone https://github.com/yourusername/jpmapper-lidar.git
    cd jpmapper-lidar
-   
-   # Create and activate a new conda environment
+     # Create and activate a new conda environment
    conda create -n jpmapper python=3.11
    conda activate jpmapper
    
    # Install core dependencies from conda-forge
-   conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer
+   conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium
    
    # Install development dependencies
    conda install -c conda-forge pytest pytest-cov
@@ -97,6 +96,8 @@ JPMapper depends on the following key packages:
 - **typer**: Building command-line interfaces
 - **numpy**: Numerical operations
 - **pandas**: Data analysis and manipulation
+- **matplotlib**: Visualization and plotting (required for analysis and CLI)
+- **folium**: Interactive map creation (optional, for HTML map output)
 
 ### Development Tools
 
@@ -436,3 +437,52 @@ print(f"Peak memory usage: {results['peak_usage_mb']:.2f} MB")
 ```
 
 Memory profiling is especially important for functions that process large LiDAR datasets to ensure efficient resource usage.
+
+## Common Issues and Troubleshooting
+
+### Missing Dependencies
+
+If you encounter errors like `ModuleNotFoundError: No module named 'matplotlib'` when running the CLI or benchmarks, you need to install the missing dependency:
+
+```bash
+# Using conda
+conda install -c conda-forge matplotlib
+
+# Using pip
+pip install matplotlib
+```
+
+### CLI Command Not Found
+
+If the `jpmapper` command is not found after installation, make sure:
+
+1. You have activated the correct conda environment or virtual environment
+2. You have installed the package in development mode with `pip install -e .`
+3. Your PATH environment variable includes the directory where pip installs executables
+
+### Import Errors
+
+If you see import errors when running the CLI or API:
+
+1. Ensure all required dependencies are installed
+2. Check that you're using the correct Python environment
+3. Verify that you've installed JPMapper in development mode with `pip install -e .`
+
+### Test Failures
+
+If you encounter test failures with messages like `ImportError: cannot import name 'xxx' from 'jpmapper.module'`:
+
+1. Make sure you have the latest version of the codebase
+2. Check that all the required modules and functions are present in the source code
+3. Run the specific failing test with verbose output to get more details:
+   ```bash
+   pytest tests/test_specific.py -v
+   ```
+
+### Performance Issues
+
+If you experience slow performance with large LiDAR datasets:
+
+1. Make sure you're using the latest versions of key dependencies (rasterio, laspy, etc.)
+2. Consider using the memory profiling tools to identify bottlenecks
+3. Check the benchmarking results to compare your performance with baseline expectations

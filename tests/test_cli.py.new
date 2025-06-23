@@ -36,21 +36,23 @@ class TestCLI:
         
         # Verify that the command ran successfully
         assert result.exit_code == 0
-          # Verify that filter_las_by_bbox was called with the correct arguments        mock_filter.assert_called_once()
+        
+        # Verify that filter_las_by_bbox was called with the correct arguments
+        mock_filter.assert_called_once()
     
-    @patch('jpmapper.api.rasterize_tile')
-    def test_rasterize_tile_command(self, mock_api_rasterize):
+    @patch('jpmapper.cli.rasterize.rasterize_tile')
+    def test_rasterize_tile_command(self, mock_rasterize):
         """Test the rasterize tile command."""
         # Setup mock to return a path
-        mock_api_rasterize.return_value = Path("output.tif")
+        mock_rasterize.return_value = Path("output.tif")
         
         # Try with direct CLI invocation
         result = runner.invoke(
-            rasterize_app,
+            rasterize_app, 
             [
                 "tile",
-                "tests/data/sample.las",
-                "output.tif",
+                "input.las", 
+                "output.tif", 
                 "--epsg", "6539",
                 "--resolution", "0.1"
             ]
@@ -65,9 +67,8 @@ class TestCLI:
         # Verify that the command ran successfully
         assert result.exit_code == 0
         
-        # For now, skip the mock assertion since it's not being called due to how
-        # the CLI is structured and patching works
-        # mock_api_rasterize.assert_called_once()
+        # Verify that rasterize_tile was called with the correct arguments
+        mock_rasterize.assert_called_once()
     
     @patch('jpmapper.cli.analyze.analyze_csv_file')
     def test_analyze_csv_command(self, mock_analyze):
