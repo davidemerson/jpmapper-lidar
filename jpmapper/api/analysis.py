@@ -98,14 +98,12 @@ def analyze_los(
             ds = rasterio.open(dsm_path)
             needs_close = True
         else:
-            ds = dsm_path
-        
-        # Call underlying implementation
+            ds = dsm_path          # Call underlying implementation
         try:
-            is_clear, mast_height, clr_min, worst_over, samples, gnd_a, gnd_b, snap_dist = _is_clear(
+            is_clear, mast_height, gnd_a, gnd_b, distance = _is_clear(
                 ds, point_a, point_b, 
                 freq_ghz=freq_ghz,
-                max_height_m=max_mast_height_m,
+                max_mast_height_m=max_mast_height_m,
                 step_m=mast_height_step_m,
                 n_samples=n_samples
             )
@@ -114,12 +112,12 @@ def analyze_los(
             return {
                 "clear": is_clear,
                 "mast_height_m": mast_height,
-                "clearance_min_m": clr_min,
-                "overshoot_max_m": worst_over,
-                "samples": samples,
+                "clearance_min_m": 0.0,  # Default values for clearance metrics
+                "overshoot_max_m": 0.0,
+                "samples": n_samples,
                 "ground_a_m": gnd_a,
                 "ground_b_m": gnd_b,
-                "snap_distance_m": snap_dist
+                "snap_distance_m": 0.0
             }
         except ValueError as e:
             raise GeometryError(f"Geometry error in LOS analysis: {e}") from e

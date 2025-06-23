@@ -81,20 +81,26 @@ class TestCLI:
                 "mast_height_m": 0,
                 "distance_m": 5000
             }
-        ]
-        
-        # Call the CLI command
+        ]        # Call the CLI command
         with patch('builtins.open', MagicMock()):
             result = runner.invoke(
-                analyze_app, 
+                analyze_app,
                 [
-                    "csv",
-                    "points.csv", 
+                    "points.csv",
                     "--las-dir", "las",
                     "--cache", "cache.tif",
                     "--json-out", "results.json"
-                ]
+                ],
+                catch_exceptions=False
             )
+
+        # Print debug information
+        print(f"Exit code: {result.exit_code}")
+        if hasattr(result, 'stdout'):
+            print(f"Stdout: {result.stdout}")
+        if hasattr(result, 'stderr'):
+            print(f"Stderr: {result.stderr}")
+        print(f"Exception: {result.exception}")
         
         # Verify that the command ran successfully
         assert result.exit_code == 0
@@ -106,47 +112,99 @@ class TestCLI:
 class TestCLIIntegration:
     """Test the CLI with the full application."""
     
-    @patch('jpmapper.api.filter_by_bbox')
+    @patch('jpmapper.cli.filter.filter_by_bbox')
     def test_filter_command_integration(self, mock_filter_api):
         """Test the filter command integration with the API."""
         # Setup mock to return an empty list
         mock_filter_api.return_value = []
         
-        # Call the CLI command
-        result = runner.invoke(
-            app, 
-            [
-                "filter", "bbox",
-                "test.las", 
-                "--bbox", "-74.01 40.70 -73.96 40.75",
-                "--dst", "output"
-            ]
-        )
+        # Create a mock header with bbox information
+        mock_header = MagicMock()
+        mock_header.mins = [0, 0, 0]
+        mock_header.maxs = [100, 100, 100]
         
-        # Verify that the command ran successfully
+        # Create a mock reader with the mock header
+        mock_reader = MagicMock()
+        mock_reader.header = mock_header
+        mock_reader.__enter__.return_value = mock_reader
+        
+        # Mock laspy.open to return our mock reader
+        with patch('laspy.open', return_value=mock_reader):
+            # Mock the path.exists to avoid file not found issues
+            with patch('pathlib.Path.exists', return_value=True):
+                with patch('pathlib.Path.is_dir', return_value=False):
+                    # Call the CLI command
+                    result = runner.invoke(
+                        app, 
+                        [
+                            "filter", "bbox",
+                            "test.las", 
+                            "--bbox", "-74.01 40.70 -73.96 40.75",
+                            "--dst", "output"
+                        ]
+                    )
+        
+        # Print debug information
+        print(f"Exit code: {result.exit_code}")
+        if hasattr(result, 'stdout'):
+            print(f"Stdout: {result.stdout}")
+        if hasattr(result, 'stderr'):
+            print(f"Stderr: {result.stderr}")
+        if hasattr(result, 'exception'):
+            print(f"Exception: {result.exception}")        # Verify that the command ran successfully
         assert result.exit_code == 0
         
         # Verify that the API function was called
         mock_filter_api.assert_called_once()
-    
-    @patch('jpmapper.api.rasterize_tile')
+        
+    @patch('jpmapper.cli.rasterize.api_rasterize_tile')
     def test_rasterize_command_integration(self, mock_rasterize_api):
         """Test the rasterize command integration with the API."""
         # Setup mock to return a path
         mock_rasterize_api.return_value = Path("output.tif")
         
-        # Call the CLI command
-        result = runner.invoke(
-            app, 
-            [
-                "rasterize", "tile",
-                "input.las", 
-                "output.tif", 
-                "--epsg", "6539",
-                "--resolution", "0.1"
-            ]
-        )
+        # Create a mock for LAS reading
+        mock_header = MagicMock()
+        mock_header.mins = [0, 0, 0]
+        mock_header.maxs = [100, 100, 100]
         
+        mock_reader = MagicMock()
+        mock_reader.header = mock_header
+        mock_reader.__enter__.return_value = mock_reader
+        
+        # Mock PDAL to prevent file access issues
+        with patch('jpmapper.io.raster._run_pdal', MagicMock()):
+            # Mock laspy.open to return our mock reader
+            with patch('laspy.open', return_value=mock_reader):
+                # Mock Path.exists and Path.is_dir to avoid file not found error
+                with patch('pathlib.Path.exists', return_value=True):
+                    with patch('pathlib.Path.is_dir', return_value=False):
+                        # Also patch Path.open, Path.write_bytes, and Path.mkdir to avoid file errors
+                        with patch('pathlib.Path.open', MagicMock()):
+                            with patch('pathlib.Path.write_bytes', MagicMock()):
+                                with patch('pathlib.Path.mkdir', MagicMock()):
+                                    with patch('pathlib.Path.parent', MagicMock()):
+                                        # Call the CLI command
+                                        result = runner.invoke(
+                                            app, 
+                                            [
+                                                "rasterize", "tile",
+                                                "input.las", 
+                                                "output.tif", 
+                                                "--epsg", "6539",
+                                                "--resolution", "0.1"
+                                            ]
+                                        )
+        
+        # Print debug information
+        print(f"Exit code: {result.exit_code}")
+        if hasattr(result, 'stdout'):
+            print(f"Stdout: {result.stdout}")
+        if hasattr(result, 'stderr'):
+            print(f"Stderr: {result.stderr}")
+        if hasattr(result, 'exception'):
+            print(f"Exception: {result.exception}")
+            
         # Verify that the command ran successfully
         assert result.exit_code == 0
         
