@@ -5,3 +5,28 @@ __pycache__/
 jpmapper.egg-info/
 *.tif
 *.tmp
+
+# Python/Environment related
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+.ruff_cache/
+.mypy_cache/
+
+# IDE/Editor related
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+results/
+*.json
+*_profile.png
+
+# Conda environment files
+environment.yml

@@ -25,7 +25,7 @@ The recommended way to set up JPMapper is using Conda, which manages dependencie
 2. **Create a new environment**:
    ```bash
    # Clone the repository
-   git clone https://github.com/yourusername/jpmapper-lidar.git
+   git clone https://github.com/davidemerson/jpmapper-lidar.git
    cd jpmapper-lidar
      # Create and activate a new conda environment
    conda create -n jpmapper python=3.11
@@ -272,14 +272,49 @@ Integration tests verify that different components work together correctly:
 - **End-to-End Tests** (`test_end_to_end.py`): Tests the entire pipeline from filtering to analysis
 - **CLI Tests** (`test_cli.py`): Tests the command-line interface
 
-### Test Data
+### Test Data Requirements
 
-Some tests require sample LiDAR data. To run these tests:
+To run the full test suite, including integration tests, you need to provide the following data:
 
-1. Place sample LAS files in the `tests/data/las` directory
-2. Ensure the `points.csv` file in `tests/data` has valid test points
+1. **LAS/LAZ Files**: 
+   - Create a directory at `tests/data/las/` if it doesn't exist
+   - Add one or more LAS/LAZ files to this directory
+   - Files should be small (preferably < 5MB) to keep the repository size manageable
+   - The LAS files do not need to cover the exact areas in points.csv - the tests are designed to be flexible
+   - The integration tests will automatically use coordinates from within your LAS file's coverage area
+   - Files should have varying elevation data for proper line-of-sight testing
 
-The test suite uses pytest fixtures to automatically skip tests that require data files when those files are not available.
+2. **Points CSV File**:
+   - The repository includes a `tests/data/points.csv` file with test points
+   - This file contains pairs of coordinates for line-of-sight testing
+   - The default points are in the New York City area (around latitude 40.7, longitude -73.9)
+   - Each entry includes two points (A and B), a frequency value, and expected line-of-sight result
+
+3. **Sources for LAS/LAZ Files**:
+   - Public repositories such as:
+     - [USGS 3DEP LiDAR Explorer](https://apps.nationalmap.gov/lidar-explorer/)
+     - [OpenTopography](https://opentopography.org/)
+     - [NOAA Digital Coast](https://coast.noaa.gov/dataviewer/)
+   - Sample data from LiDAR software providers
+   - Converted elevation data using tools like PDAL or LAStools
+
+The test suite is designed to skip tests that require data files when they are not available. This allows basic unit tests to run without any test data, while integration tests will run when appropriate data is provided.
+
+Important notes about test data:
+- For end-to-end tests, the system will extract test coordinates from within your LAS file's coverage area
+- When testing with points.csv, the test is informational only and doesn't strictly validate that results match the expected values
+- If test points from points.csv fall outside your LAS file coverage, those specific test cases will be skipped
+
+### Test Data Structure
+
+The `tests/data` directory should have this structure:
+```
+tests/data/
+├── las/              # Directory for LAS/LAZ files
+│   └── (your LAS files here)
+├── points.csv        # Test points for line-of-sight analysis
+└── README.md         # Information about test data requirements
+```
 
 ### Test Mocking
 
