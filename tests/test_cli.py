@@ -94,10 +94,9 @@ class TestCLI:
         ]        # Call the CLI command
         with patch('builtins.open', MagicMock()):
             result = runner.invoke(
-                analyze_app,
-                [
+                analyze_app,                [
                     "points.csv",
-                    "--las_dir", "las",
+                    "--las-dir", "las",
                     "--cache", "cache.tif",
                     "--json-out", "results.json"
                 ],
@@ -238,11 +237,10 @@ class TestCLIIntegration:
         # Call the CLI command
         with patch('builtins.open', MagicMock()):
             result = runner.invoke(
-                app, 
-                [
+                app,                [
                     "analyze", "csv",
                     "points.csv", 
-                    "--las_dir", "las",
+                    "--las-dir", "las",
                     "--cache", "cache.tif",
                     "--json-out", "results.json"
                 ]

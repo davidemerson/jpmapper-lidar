@@ -468,17 +468,16 @@ def run_real_data_benchmarks(las_dir: Optional[Path] = None, dsm_dir: Optional[P
 def main():
     """Main function to run benchmarks from command line."""
     parser = argparse.ArgumentParser(description="Run JPMapper benchmarks with real data")
-    parser.add_argument("--las_dir", type=str, help="Directory containing LAS/LAZ files")
+    parser.add_argument("--las-dir", type=str, help="Directory containing LAS/LAZ files")
     parser.add_argument("--dsm-dir", type=str, help="Directory containing DSM files")
     parser.add_argument("--output-dir", type=str, default="real_data_benchmark_results",
                       help="Directory to save results to")
     parser.add_argument("--iterations", type=int, default=3,
                       help="Number of iterations for each benchmark")
     args = parser.parse_args()
-    
-    # Validate inputs
+      # Validate inputs
     if not args.las_dir and not args.dsm_dir:
-        print("Error: Must provide at least one of --las_dir or --dsm-dir")
+        print("Error: Must provide at least one of --las-dir or --dsm-dir")
         return
     
     las_dir = Path(args.las_dir) if args.las_dir else None

@@ -153,7 +153,7 @@ jpmapper filter bbox path/to/las/files --dst path/to/output
 jpmapper rasterize tile input.las output.tif --epsg 6539 --resolution 0.1
 
 # Analyze point-to-point links
-jpmapper analyze csv points.csv --las_dir path/to/las/files --json-out results.json
+jpmapper analyze csv points.csv --las-dir path/to/las/files --json-out results.json
 ```
 
 ## Using the API
@@ -190,8 +190,45 @@ result = analyze_los(
 # Check if path is clear
 if result["clear"]:
     print("Path is clear!")
-else:
-    print(f"Path is blocked. Minimum mast height required: {result['mast_height_m']} m")
+else:    print(f"Path is blocked. Minimum mast height required: {result['mast_height_m']} m")
+```
+
+## Height Calculations and LiDAR Processing
+
+### Digital Surface Model vs. Digital Terrain Model
+
+JPMapper processes LiDAR data as a **Digital Surface Model (DSM)** rather than a Digital Terrain Model (DTM). This is an important distinction:
+
+- **Digital Surface Model (DSM)**: Includes heights of all objects on the terrain surface, including buildings, vegetation, and other structures.
+- **Digital Terrain Model (DTM)**: Represents only the bare ground surface without any objects.
+
+### First Return Processing
+
+JPMapper specifically uses **first return** LiDAR data to create DSMs, which ensures:
+
+1. **Building and structure heights are included**: First returns capture the highest points of objects, including rooftops, trees, and other structures.
+2. **Maximum elevation per pixel**: The rasterization process uses the maximum Z value in each pixel, preserving tall features.
+3. **Realistic obstruction modeling**: Line-of-sight calculations accurately account for all potential obstructions between points.
+
+### How Mast Heights Work
+
+When analyzing line-of-sight between two points, mast heights are added on top of the DSM height (which already includes buildings and structures):
+
+1. The DSM provides the base elevation at each point, including any buildings/structures
+2. Mast heights are added to these elevations (not just to bare ground)
+3. Line-of-sight is calculated between the resulting elevated points
+4. The program can determine the minimum mast height needed for a clear path
+
+This approach ensures that the analysis accurately represents real-world conditions where antennas would be mounted on top of existing structures.
+
+### PDAL Pipeline Details
+
+JPMapper uses PDAL with specific configurations to generate appropriate DSMs:
+
+```
+- Uses "output_type": "max" to keep the tallest return per pixel
+- Excludes only Classification 7 (noise) while keeping all other points
+- Preserves building heights, vegetation, and other structures
 ```
 
 ## Error Handling
@@ -393,10 +430,10 @@ For more realistic performance measurements with actual LAS/LAZ files and DSMs:
 
 ```bash
 # Run benchmarks with real data
-python -m benchmarks.real_data_benchmarks --las_dir path/to/las/files --dsm-dir path/to/dsm/files
+python -m benchmarks.real_data_benchmarks --las-dir path/to/las/files --dsm-dir path/to/dsm/files
 
 # Specify number of iterations and output directory
-python -m benchmarks.real_data_benchmarks --las_dir path/to/las/files --iterations 5 --output-dir results/benchmarks
+python -m benchmarks.real_data_benchmarks --las-dir path/to/las/files --iterations 5 --output-dir results/benchmarks
 ```
 
 #### Comparing Benchmark Results

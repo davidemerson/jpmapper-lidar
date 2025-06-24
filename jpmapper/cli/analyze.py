@@ -60,7 +60,7 @@ def _dsm_linear_unit(crs) -> str:  # CRS can be pyproj or rasterio CRS
 @app.command("csv")
 def analyze_csv(
     points_csv: Path = typer.Argument(..., help="CSV with point pairs"),
-    las_dir: Path = typer.Option(None, help="Directory containing LAS/LAZ tiles"),
+    las_dir: Path = typer.Option(None, "--las-dir", help="Directory containing LAS/LAZ tiles"),
     epsg: int = typer.Option(6539, help="Target EPSG (default NYC Long-Island ftUS)"),
     resolution: float = typer.Option(0.10, help="Desired DSM resolution (metres)"),
     max_mast_height_m: int = typer.Option(5, help="Maximum mast height to test (metres)"),
