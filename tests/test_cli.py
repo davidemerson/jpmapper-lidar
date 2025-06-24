@@ -97,7 +97,7 @@ class TestCLI:
                 analyze_app,
                 [
                     "points.csv",
-                    "--las-dir", "las",
+                    "--las_dir", "las",
                     "--cache", "cache.tif",
                     "--json-out", "results.json"
                 ],
@@ -242,7 +242,7 @@ class TestCLIIntegration:
                 [
                     "analyze", "csv",
                     "points.csv", 
-                    "--las-dir", "las",
+                    "--las_dir", "las",
                     "--cache", "cache.tif",
                     "--json-out", "results.json"
                 ]

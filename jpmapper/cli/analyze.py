@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 _setup_logging()
 
 app = typer.Typer(
-    help="Analyse a CSV of point-to-point links against a first-return DSM.",
+    help="Analyze a CSV of point-to-point links against a first-return DSM.",
     add_help_option=True,
 )
 
@@ -70,7 +70,7 @@ def analyze_csv(
     cache: Path = typer.Option(None, help="Cache file for DSM raster"),
     workers: int = typer.Option(None, help="Number of worker processes"),
 ) -> List[Dict[str, Any]]:
-    """Analyse every row in the CSV and print a Rich summary table."""
+    """Analyze every row in the CSV and print a Rich summary table."""
     
     # Mock the file existence for tests
     if 'pytest' in sys.modules and not Path(points_csv).exists():

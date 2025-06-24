@@ -153,7 +153,7 @@ jpmapper filter bbox path/to/las/files --dst path/to/output
 jpmapper rasterize tile input.las output.tif --epsg 6539 --resolution 0.1
 
 # Analyze point-to-point links
-jpmapper analyze csv points.csv --las-dir path/to/las/files --json-out results.json
+jpmapper analyze csv points.csv --las_dir path/to/las/files --json-out results.json
 ```
 
 ## Using the API
@@ -393,10 +393,10 @@ For more realistic performance measurements with actual LAS/LAZ files and DSMs:
 
 ```bash
 # Run benchmarks with real data
-python -m benchmarks.real_data_benchmarks --las-dir path/to/las/files --dsm-dir path/to/dsm/files
+python -m benchmarks.real_data_benchmarks --las_dir path/to/las/files --dsm-dir path/to/dsm/files
 
 # Specify number of iterations and output directory
-python -m benchmarks.real_data_benchmarks --las-dir path/to/las/files --iterations 5 --output-dir results/benchmarks
+python -m benchmarks.real_data_benchmarks --las_dir path/to/las/files --iterations 5 --output-dir results/benchmarks
 ```
 
 #### Comparing Benchmark Results
