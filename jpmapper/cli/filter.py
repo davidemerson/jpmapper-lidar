@@ -71,7 +71,7 @@ def filter_bbox(
         # Single file mode or test mode
         tiles = [src]
     
-    # Always call the API function (this ensures the mock is triggered in tests)
+    # Always use the API function for consistency
     selected = filter_by_bbox(tiles, bbox=bbox_tuple, dst_dir=dst)
 
     typer.secho(

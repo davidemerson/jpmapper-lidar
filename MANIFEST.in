@@ -1,0 +1,9 @@
+include README.md LICENSE
+include requirements.txt requirements-dev.txt
+recursive-include jpmapper *
+prune output
+exclude output.tif
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude .DS_Store

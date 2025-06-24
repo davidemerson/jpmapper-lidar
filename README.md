@@ -28,6 +28,8 @@ The recommended way to set up JPMapper is using Conda, which manages dependencie
    git clone https://github.com/davidemerson/jpmapper-lidar.git
    cd jpmapper-lidar
      # Create and activate a new conda environment
+   conda update conda
+   conda config --add channels conda-forge
    conda create -n jpmapper python=3.11
    conda activate jpmapper
    

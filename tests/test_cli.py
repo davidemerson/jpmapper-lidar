@@ -17,7 +17,7 @@ runner = CliRunner()
 class TestCLI:
     """Test suite for the CLI modules."""
     
-    @patch('jpmapper.cli.filter.filter_las_by_bbox')
+    @patch('jpmapper.cli.filter.filter_by_bbox')
     def test_filter_bbox_command(self, mock_filter):
         """Test the filter bbox command."""
         # Setup mock to return an empty list
@@ -33,23 +33,33 @@ class TestCLI:
                 "--dst", "output"
             ]
         )
-        
-        # Verify that the command ran successfully
+          # Verify that the command ran successfully
         assert result.exit_code == 0
-          # Verify that filter_las_by_bbox was called with the correct arguments        mock_filter.assert_called_once()
+        # Verify that filter_by_bbox was called with the correct arguments
+        mock_filter.assert_called_once()
     
-    @patch('jpmapper.api.rasterize_tile')
+    @patch('jpmapper.api.raster.rasterize_tile')
     def test_rasterize_tile_command(self, mock_api_rasterize):
         """Test the rasterize tile command."""
         # Setup mock to return a path
         mock_api_rasterize.return_value = Path("output.tif")
+
+        # Define a valid test LAS file path
+        test_las_path = str(Path(__file__).parent / "data" / "las" / "test_sample.las")
         
+        # Create the test file if it doesn't exist (to ensure test runs)
+        test_file = Path(test_las_path)
+        if not test_file.exists():
+            test_file.parent.mkdir(parents=True, exist_ok=True)
+            # Create an empty file for testing
+            test_file.touch()
+
         # Try with direct CLI invocation
         result = runner.invoke(
             rasterize_app,
             [
                 "tile",
-                "tests/data/sample.las",
+                test_las_path,
                 "output.tif",
                 "--epsg", "6539",
                 "--resolution", "0.1"
@@ -59,7 +69,7 @@ class TestCLI:
         # Print debug information
         print(f"Exit code: {result.exit_code}")
         print(f"Output: {result.output}")
-        if hasattr(result, 'exception'):
+        if hasattr(result, 'exception') and result.exception:
             print(f"Exception: {result.exception}")
         
         # Verify that the command ran successfully

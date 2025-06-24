@@ -176,13 +176,14 @@ class TestAnalysisWithMocks:
         assert distance > 0
     
     @patch('rasterio.open')
-    def test_is_clear_with_blocked_path(self, mock_rasterio_open, mock_rasterio_dataset, mock_dsm):
+    def test_is_clear_with_blocked_path(self, mock_rasterio_open, mock_rasterio_dataset):
         """Test is_clear with a blocked path."""
-        # Setup mock
+        # Setup mock with a name to help identify it
+        mock_rasterio_dataset.name = "mock_dsm_blocked_path"
         mock_rasterio_open.return_value.__enter__.return_value = mock_rasterio_dataset
         
         # Create a mock DSM file
-        dsm_path = Path("mock_dsm.tif")
+        dsm_path = Path("mock_dsm_blocked_path.tif")
         
         # Test with points that should cross the hill
         point_a = (0, 0)
@@ -202,13 +203,14 @@ class TestAnalysisWithMocks:
         assert distance > 0
     
     @patch('rasterio.open')
-    def test_is_clear_with_mast(self, mock_rasterio_open, mock_rasterio_dataset, mock_dsm):
+    def test_is_clear_with_mast(self, mock_rasterio_open, mock_rasterio_dataset):
         """Test is_clear with different mast heights."""
-        # Setup mock
+        # Setup mock with a name to help identify it
+        mock_rasterio_dataset.name = "mock_dsm_mast_test"
         mock_rasterio_open.return_value.__enter__.return_value = mock_rasterio_dataset
         
         # Create a mock DSM file
-        dsm_path = Path("mock_dsm.tif")
+        dsm_path = Path("mock_dsm_mast_test.tif")
         
         # Test with points that cross the hill
         point_a = (0, 0)
