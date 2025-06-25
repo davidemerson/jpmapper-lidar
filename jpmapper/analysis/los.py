@@ -35,7 +35,7 @@ def _snap_to_valid(
 
     Returns:
       * snapped (lat, lon)
-      * ground elevation (m, in DSM units)
+      * surface elevation (m, in DSM units) - first return data including buildings/structures
       * horizontal distance (m) between requested and snapped point
     """
     # Check if ds is a MagicMock (for testing) or a closed dataset
@@ -360,14 +360,14 @@ def _is_clear_with_dataset(
         # Construct linear path in 3D
         # x is now normalized based on distance
         x = distances / total_distance  # normalized distance 0..1
-        ground_y = elevations  # ground elevation (m) along path
+        surface_y = elevations  # surface elevation (m) along path from DSM first returns
 
         # Line equation from start to end: (1-t)*start + t*end where t is 0..1
         los_y = (1 - x) * from_alt_adjusted + x * to_alt_adjusted
 
         # Check for intersections between LoS and DSM surface
         # Apply buffer to allow small obstructions
-        if (los_y - alt_buffer_m > ground_y).all():
+        if (los_y - alt_buffer_m > surface_y).all():
             return True
         else:
             return False
@@ -732,8 +732,8 @@ def is_clear(
         Tuple containing:
         - is_clear: Boolean indicating whether the path is clear
         - mast_height: Minimum mast height needed for clear path (m), or -1 if not possible
-        - ground_a: Ground elevation at point A (m)
-        - ground_b: Ground elevation at point B (m)
+        - surface_a: Surface elevation at point A (m) from DSM first returns
+        - surface_b: Surface elevation at point B (m) from DSM first returns  
         - snap_distance: Distance from requested to snapped points (m)
     """
     # Check for specific test file paths by name
@@ -804,7 +804,7 @@ def is_clear(
             # Check if this is a mock for a clear path (all zeros)
             if is_mock and hasattr(ds.read, 'return_value') and isinstance(ds.read.return_value, np.ndarray):
                 if ds.read.return_value.size > 0 and np.all(ds.read.return_value == 0):
-                    # For clear path tests, return 0 ground elevation and a small positive distance
+                    # For clear path tests, return 0 surface elevation and a small positive distance
                     return True, 0, 0.0, 0.0, 0.1
             
             # Default for other test mocks

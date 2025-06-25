@@ -90,7 +90,7 @@ class TestWorkflows:
         mock_rasterio_open.return_value = mock_dataset
         
         # Setup mock for is_clear with the correct return format (matching actual implementation in los.py)
-        # (clear, mast_height, ground_A, ground_B, distance)
+        # (clear, mast_height, surface_A, surface_B, distance)
         mock_is_clear.return_value = (True, 0, 10, 15, 100)
         
         # Call the API function
@@ -114,13 +114,13 @@ class TestWorkflows:
           # Verify that the result contains the expected fields
         assert "clear" in result
         assert "mast_height_m" in result
-        assert "ground_a_m" in result
-        assert "ground_b_m" in result
+        assert "surface_height_a_m" in result
+        assert "surface_height_b_m" in result
           # Verify that the result values match the mock values
         assert result["clear"] is True
         assert result["mast_height_m"] == 0
-        assert result["ground_a_m"] == 10
-        assert result["ground_b_m"] == 15
+        assert result["surface_height_a_m"] == 10
+        assert result["surface_height_b_m"] == 15
         
     @patch('rasterio.open', autospec=True)
     @patch('jpmapper.api.analysis._profile', autospec=True)

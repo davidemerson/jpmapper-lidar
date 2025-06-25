@@ -274,8 +274,8 @@ JPMapper supports multiple output formats for analysis results:
     "clear": false,
     "mast_height_m": 3,
     "distance_m": 5420.2,
-    "ground_height_a_m": 15.5,
-    "ground_height_b_m": 42.1,
+    "surface_height_a_m": 15.5,
+    "surface_height_b_m": 42.1,
     "clearance_min_m": -2.3,
     "freq_ghz": 5.8
   }
@@ -477,8 +477,8 @@ JPMapper specifically uses **first return** LiDAR data to create DSMs, which ens
 
 When analyzing line-of-sight between two points, mast heights are added on top of the DSM height (which already includes buildings and structures):
 
-1. The DSM provides the base elevation at each point, including any buildings/structures
-2. Mast heights are added to these elevations (not just to bare ground)
+1. The DSM provides the base surface elevation at each point, including any buildings/structures
+2. Mast heights are added to these surface elevations (not to bare ground)
 3. Line-of-sight is calculated between the resulting elevated points
 4. The program can determine the minimum mast height needed for a clear path
 

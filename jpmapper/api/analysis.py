@@ -43,8 +43,8 @@ def analyze_los(
         Dictionary containing results of the analysis:
         - clear: True if path is clear, False otherwise
         - mast_height_m: Minimum mast height required for clearance (-1 if never clear)
-        - ground_height_a_m: Ground elevation at point A in meters
-        - ground_height_b_m: Ground elevation at point B in meters
+        - surface_height_a_m: Surface elevation at point A in meters (from DSM first returns)
+        - surface_height_b_m: Surface elevation at point B in meters (from DSM first returns)
         - distance_m: Distance between points in meters
         - clearance_min_m: Minimum clearance distance in meters
     
@@ -120,12 +120,12 @@ def analyze_los(
                 return {
                     "clear": is_clear,
                     "mast_height_m": mast_height,
-                    "ground_height_a_m": gnd_a,
-                    "ground_height_b_m": gnd_b,
+                    "surface_height_a_m": gnd_a,
+                    "surface_height_b_m": gnd_b,
                     "distance_m": 1000.0,  # Mock distance for tests
                     "clearance_min_m": 0.0,  # Default clearance value
-                    "ground_a_m": gnd_a,      # Add API field names too
-                    "ground_b_m": gnd_b,
+                    "surface_a_m": gnd_a,      # Add API field names too
+                    "surface_b_m": gnd_b,
                     "distance": distance
                 }
             
@@ -133,11 +133,11 @@ def analyze_los(
             return {
                 "clear": is_clear,
                 "mast_height_m": mast_height,
-                "ground_height_a_m": gnd_a,   # Include test field names
-                "ground_height_b_m": gnd_b,
+                "surface_height_a_m": gnd_a,   # Include test field names  
+                "surface_height_b_m": gnd_b,
                 "distance_m": distance,       # Include test field name
-                "ground_a_m": gnd_a,          # API field names
-                "ground_b_m": gnd_b,
+                "surface_a_m": gnd_a,          # API field names
+                "surface_b_m": gnd_b,
                 "distance": distance,         # API field name
                 "clearance_min_m": 0.0,       # Default values for clearance metrics
                 "clearance_avg_m": 0.0,

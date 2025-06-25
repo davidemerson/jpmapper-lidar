@@ -66,8 +66,8 @@ def _analyze_single_row(args: Tuple[Dict[str, Any], Path, float, int]) -> Dict[s
             "clear": analysis["clear"],
             "mast_height_m": analysis["mast_height_m"],
             "distance_m": analysis["distance_m"],
-            "ground_height_a_m": analysis.get("ground_height_a_m", 0),
-            "ground_height_b_m": analysis.get("ground_height_b_m", 0),
+            "surface_height_a_m": analysis.get("surface_height_a_m", 0),
+            "surface_height_b_m": analysis.get("surface_height_b_m", 0),
             "clearance_min_m": analysis.get("clearance_min_m", 0),
             "freq_ghz": freq_ghz
         }

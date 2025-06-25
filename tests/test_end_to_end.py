@@ -115,8 +115,8 @@ class TestEndToEndWorkflow:
                 # Assert that the result contains the expected fields
                 assert "clear" in result
                 assert "mast_height_m" in result
-                assert "ground_height_a_m" in result
-                assert "ground_height_b_m" in result
+                assert "surface_height_a_m" in result
+                assert "surface_height_b_m" in result
                 assert "distance_m" in result
                 
                 # The result may be clear or blocked, but either is valid
