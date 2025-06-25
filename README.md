@@ -4,13 +4,13 @@ A high-performance Python toolkit for LiDAR data processing and wireless link an
 
 ## Key Features
 
-✅ **High-Performance Processing**: Automatic resource detection and parallel processing  
-✅ **LiDAR Data Filtering**: Filter LAS/LAZ files by geographic bounding boxes  
-✅ **DSM Generation**: Create Digital Surface Models from first-return LiDAR data  
-✅ **Line-of-Sight Analysis**: Analyze wireless link clearance with Fresnel zone calculations  
-✅ **CLI & API**: Both command-line tools and Python API for integration  
-✅ **Automatic Optimization**: Memory-aware scaling and intelligent worker management  
-✅ **Comprehensive Testing**: 80+ tests ensuring reliability and performance
+- **High-Performance Processing**: Automatic resource detection and parallel processing  
+- **LiDAR Data Filtering**: Filter LAS/LAZ files by geographic bounding boxes  
+- **DSM Generation**: Create Digital Surface Models from first-return LiDAR data  
+- **Line-of-Sight Analysis**: Analyze wireless link clearance with Fresnel zone calculations  
+- **CLI & API**: Both command-line tools and Python API for integration  
+- **Automatic Optimization**: Memory-aware scaling and intelligent worker management  
+- **Comprehensive Testing**: 80+ tests ensuring reliability and performance
 
 ## Quick Start
 
@@ -20,7 +20,7 @@ For immediate use with conda:
 # Clone and setup
 git clone https://github.com/davidemerson/jpmapper-lidar.git
 cd jpmapper-lidar
-conda create -n jpmapper python=3.11
+conda create -n jpmapper --file requirements.txt python=3.11
 conda activate jpmapper
 conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium psutil
 pip install -e .
@@ -82,7 +82,7 @@ The recommended way to set up JPMapper is using Conda, which manages dependencie
      # Create and activate a new conda environment
    conda update conda
    conda config --add channels conda-forge
-   conda create -n jpmapper python=3.11
+   conda create -n jpmapper --file requirements.txt python=3.11
    conda activate jpmapper
    
    # Install core dependencies from conda-forge
