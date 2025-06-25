@@ -16,6 +16,8 @@ from typing import Sequence, Tuple
 import laspy
 import rasterio
 from rasterio.merge import merge as rio_merge
+from rich.console import Console
+from rich.progress import Progress, TaskID, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 
 # Optional imports for performance optimization
 try:
@@ -47,14 +49,14 @@ def _get_optimal_workers(workers: int | None = None) -> int:
         try:
             available_memory_gb = psutil.virtual_memory().available / (1024**3)
             
-            # More conservative estimate: each worker needs ~3GB for LiDAR processing
-            # (increased from 2GB to be safer with large datasets)
-            memory_limited_workers = max(1, int(available_memory_gb / 3))
+            # Very conservative estimate: each worker needs ~5GB for high-resolution LiDAR processing
+            # This accounts for large LAS files and high-resolution rasterization
+            memory_limited_workers = max(1, int(available_memory_gb / 5))
             
             # Use the minimum of CPU-limited and memory-limited workers
-            # More conservative: use only 50% of available CPUs for large datasets
-            # and cap at 16 workers maximum to avoid process pool issues
-            max_cpu_workers = max(1, min(16, int(cpu_count * 0.5)))
+            # Ultra-conservative: use only 25% of available CPUs for large datasets
+            # and cap at 8 workers maximum to avoid memory issues
+            max_cpu_workers = max(1, min(8, int(cpu_count * 0.25)))
             
             optimal_workers = min(max_cpu_workers, memory_limited_workers)
             log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count}, "
@@ -65,8 +67,8 @@ def _get_optimal_workers(workers: int | None = None) -> int:
             # Fallback if psutil fails
             pass
     
-    # Fallback: use 50% of available CPUs, capped at 16 workers
-    optimal_workers = max(1, min(16, int(cpu_count * 0.5)))
+    # Fallback: use 25% of available CPUs, capped at 8 workers
+    optimal_workers = max(1, min(8, int(cpu_count * 0.25)))
     log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count})")
     return optimal_workers
 
@@ -318,10 +320,24 @@ def _create_empty_raster(dst_tif: Path, epsg: int, resolution: float = 0.1) -> P
 
 # ---------- parallel helper (Windows-safe) -------------------------------------
 def _rasterize_one(args: Tuple[Path, Path, int, float]) -> Path:
+    """Rasterize a single LAS file, with error handling to skip problematic files."""
     src, out_dir, epsg, res = args
     dst = out_dir / f"{src.stem}.tif"
-    rasterize_tile(src, dst, epsg=epsg, resolution=res)
-    return dst
+    
+    try:
+        rasterize_tile(src, dst, epsg=epsg, resolution=res)
+        return dst
+    except (MemoryError, RasterizationError) as e:
+        # Log the error but continue processing other files
+        log.warning(f"Skipping {src.name} due to error: {e}")
+        
+        # Create an empty placeholder file so we can track which files were skipped
+        # This prevents the merge process from failing
+        placeholder = out_dir / f"{src.stem}_SKIPPED.txt"
+        placeholder.write_text(f"Skipped due to error: {e}")
+        
+        # Return None to indicate this file was skipped
+        return None
 
 
 def rasterize_dir_parallel(
@@ -342,11 +358,92 @@ def rasterize_dir_parallel(
     # Get optimal number of workers
     optimal_workers = _get_optimal_workers(workers)
     
-    if optimal_workers == 1:
-        return [_rasterize_one(t) for t in tasks]
-
-    with ProcessPoolExecutor(max_workers=optimal_workers) as pool:
-        return list(pool.map(_rasterize_one, tasks))
+    console = Console()
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("•"),
+        TextColumn("{task.completed}/{task.total}"),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        
+        if optimal_workers == 1:
+            # Single-threaded processing with progress
+            task_id = progress.add_task(
+                f"[cyan]Rasterizing {len(las_files)} LAS files (single-threaded)", 
+                total=len(tasks)
+            )
+            
+            results = []
+            for i, task in enumerate(tasks):
+                src_file = task[0]
+                progress.update(task_id, description=f"[cyan]Processing {src_file.name}")
+                result = _rasterize_one(task)
+                results.append(result)
+                progress.advance(task_id)
+                
+        else:
+            # Multi-threaded processing with progress
+            task_id = progress.add_task(
+                f"[cyan]Rasterizing {len(las_files)} LAS files ({optimal_workers} workers)", 
+                total=len(tasks)
+            )
+            
+            results = []
+            completed_count = 0
+            
+            with ProcessPoolExecutor(max_workers=optimal_workers) as pool:
+                # Submit all tasks
+                future_to_task = {pool.submit(_rasterize_one, task): task for task in tasks}
+                
+                # Process completed tasks as they finish
+                from concurrent.futures import as_completed
+                for future in as_completed(future_to_task):
+                    task = future_to_task[future]
+                    src_file = task[0]
+                    
+                    try:
+                        result = future.result()
+                        results.append(result)
+                        
+                        if result is not None:
+                            status = "[green]✓[/green]"
+                        else:
+                            status = "[yellow]⚠[/yellow] skipped"
+                            
+                    except Exception as e:
+                        log.warning(f"Error processing {src_file.name}: {e}")
+                        results.append(None)
+                        status = "[red]✗[/red] failed"
+                    
+                    completed_count += 1
+                    progress.update(
+                        task_id, 
+                        completed=completed_count,
+                        description=f"[cyan]Processed {src_file.name} {status}"
+                    )
+    
+    # Filter out None values (skipped files) and return only successful results
+    successful_results = [r for r in results if r is not None]
+    
+    if not successful_results:
+        raise RasterizationError("All LAS files failed to rasterize")
+    
+    skipped_count = len(results) - len(successful_results)
+    if skipped_count > 0:
+        console.print(f"[yellow]⚠ Skipped {skipped_count} problematic files[/yellow]")
+    
+    console.print(f"[green]✓ Successfully rasterized {len(successful_results)} of {len(las_files)} LAS files[/green]")
+    log.info(f"Successfully rasterized {len(successful_results)} of {len(las_files)} LAS files")
+    return successful_results
 
 # ---------- merge & cache unchanged -------------------------------------------
 def merge_tiles(tifs: Sequence[Path], dst: Path) -> None:
@@ -366,13 +463,41 @@ def merge_tiles(tifs: Sequence[Path], dst: Path) -> None:
         _create_empty_raster(dst, 6539, 0.1)
         return
 
-    with rasterio.Env():
-        srcs = [rasterio.open(str(t)) for t in tifs]
-        mosaic, transform = rio_merge(srcs, mem_limit=512)
-        meta = srcs[0].meta.copy()
-        meta.update(height=mosaic.shape[1], width=mosaic.shape[2], transform=transform)
-        with rasterio.open(dst, "w", **meta) as ds:
-            ds.write(mosaic)
+    console = Console()
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        
+        merge_task = progress.add_task(f"[magenta]Merging {len(tifs)} tiles into DSM", total=100)
+        
+        with rasterio.Env():
+            progress.update(merge_task, completed=10, description="[magenta]Opening raster files")
+            srcs = [rasterio.open(str(t)) for t in tifs]
+            
+            progress.update(merge_task, completed=30, description="[magenta]Computing mosaic")
+            mosaic, transform = rio_merge(srcs, mem_limit=512)
+            
+            progress.update(merge_task, completed=70, description="[magenta]Writing merged DSM")
+            meta = srcs[0].meta.copy()
+            meta.update(height=mosaic.shape[1], width=mosaic.shape[2], transform=transform)
+            
+            with rasterio.open(dst, "w", **meta) as ds:
+                ds.write(mosaic)
+            
+            progress.update(merge_task, completed=100, description="[magenta]✓ DSM merge complete")
+            
+            # Close source files
+            for src in srcs:
+                src.close()
+    
+    console.print(f"[green]✓ Merged {len(tifs)} tiles → {dst.name}[/green]")
     log.debug("Merged %d tiles → %s", len(tifs), dst)
 
 
@@ -388,8 +513,11 @@ def cached_mosaic(
     # In test mode, we need to handle things differently
     in_test_mode = "pytest" in sys.modules
     
+    console = Console()
+    
     # If not forcing rebuild and the cache exists, just return it
     if not force and cache_path.exists() and not in_test_mode:
+        console.print(f"[green]✓ Using existing DSM cache: {cache_path.name}[/green]")
         return cache_path
     
     # Special test case for test_cached_mosaic_cache_exists
@@ -399,6 +527,9 @@ def cached_mosaic(
             mock_las = las_dir / "mock_test.las"
             mock_las.touch()
         return cache_path
+    
+    console.print(f"[cyan]Creating DSM from LAS files in {las_dir}[/cyan]")
+    console.print(f"[cyan]Resolution: {resolution}m, EPSG: {epsg}[/cyan]")
     
     # Create a temporary directory for the rasterized tiles
     h = md5()
@@ -429,8 +560,9 @@ def cached_mosaic(
         else:
             raise FileNotFoundError(f"No .las in {las_dir}")
     
+    console.print(f"[cyan]Found {len(las_files)} LAS files to process[/cyan]")
+    
     # Process files in parallel
-    log.info(f"Processing {len(las_files)} LAS files with {optimal_workers} workers")
     tifs = rasterize_dir_parallel(
         las_dir, tmp_dir, epsg=epsg, resolution=resolution, workers=optimal_workers
     )
@@ -441,5 +573,6 @@ def cached_mosaic(
     else:
         # Create an empty raster for the test
         _create_empty_raster(cache_path, epsg, resolution)
-        
+    
+    console.print(f"[bold green]✓ DSM creation complete: {cache_path.name}[/bold green]")
     return cache_path

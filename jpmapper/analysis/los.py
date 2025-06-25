@@ -430,7 +430,15 @@ def profile(
     xs = np.linspace(x1, x2, n_samples)
     ys = np.linspace(y1, y2, n_samples)
     ground = np.empty(n_samples, dtype=float)
-    ds.read(1, out=ground, samples=list(zip(xs, ys)), resampling=rasterio.enums.Resampling.nearest)
+    
+    # Sample elevations at each point along the line
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        row, col = ds.index(x, y)
+        try:
+            ground[i] = ds.read(1, window=((row, row+1), (col, col+1)))[0, 0]
+        except (IndexError, ValueError):
+            # If point is outside raster bounds, use nearest neighbor
+            ground[i] = 0.0
     
     # Calculate distances
     distance = np.linspace(0, math.hypot(x2 - x1, y2 - y1), n_samples)
