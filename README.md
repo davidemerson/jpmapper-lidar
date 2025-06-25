@@ -22,7 +22,6 @@ git clone https://github.com/davidemerson/jpmapper-lidar.git
 cd jpmapper-lidar
 conda create -n jpmapper --file requirements.txt python=3.11
 conda activate jpmapper
-conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium psutil
 pip install -e .
 
 # Test installation
@@ -84,9 +83,6 @@ The recommended way to set up JPMapper is using Conda, which manages dependencie
    conda config --add channels conda-forge
    conda create -n jpmapper --file requirements.txt python=3.11
    conda activate jpmapper
-   
-   # Install core dependencies from conda-forge
-   conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium psutil
    
    # Install development dependencies
    conda install -c conda-forge pytest pytest-cov
