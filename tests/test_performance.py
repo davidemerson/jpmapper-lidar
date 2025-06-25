@@ -47,7 +47,7 @@ class TestPerformanceOptimizations:
         
         workers = _get_optimal_workers(None)
         
-        # With 2GB available and 2GB per worker, should get 1 worker
+        # With 2GB available and 5GB per worker requirement, should get 1 worker (minimum)
         assert workers == 1
     
     @patch('psutil.virtual_memory')
@@ -58,9 +58,10 @@ class TestPerformanceOptimizations:
         
         workers = _get_optimal_workers(None)
         
-        # Should be limited by CPU count, not memory
+        # Should be limited by conservative CPU count, not memory
+        # New logic: 25% of CPUs, capped at 8 workers
         cpu_count = multiprocessing.cpu_count()
-        expected_max = max(1, int(cpu_count * 0.75))
+        expected_max = max(1, min(8, int(cpu_count * 0.25)))
         assert workers <= expected_max
     
     @patch('jpmapper.io.raster.psutil')
@@ -71,9 +72,10 @@ class TestPerformanceOptimizations:
         
         workers = _get_optimal_workers(None)
         
-        # Should fall back to CPU-based calculation
+        # Should fall back to conservative CPU-based calculation
+        # New logic: 25% of CPUs, capped at 8 workers
         cpu_count = multiprocessing.cpu_count()
-        expected = max(1, int(cpu_count * 0.75))
+        expected = max(1, min(8, int(cpu_count * 0.25)))
         assert workers == expected
     
     def test_get_optimal_analysis_workers(self):
