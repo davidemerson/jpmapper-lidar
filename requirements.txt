@@ -1,7 +1,7 @@
 # Core dependencies for JPMapper
 numpy>=1.24.0
 rasterio>=1.3.0
-pdal>=3.0.0
+pdal>=2.8.4
 python-pdal>=3.0.0
 laspy>=2.0.0
 shapely>=2.0.0

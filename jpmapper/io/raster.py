@@ -47,12 +47,14 @@ def _get_optimal_workers(workers: int | None = None) -> int:
         try:
             available_memory_gb = psutil.virtual_memory().available / (1024**3)
             
-            # Conservative estimate: each worker needs ~2GB for LiDAR processing
-            memory_limited_workers = max(1, int(available_memory_gb / 2))
+            # More conservative estimate: each worker needs ~3GB for LiDAR processing
+            # (increased from 2GB to be safer with large datasets)
+            memory_limited_workers = max(1, int(available_memory_gb / 3))
             
             # Use the minimum of CPU-limited and memory-limited workers
-            # But never exceed 75% of available CPUs to leave room for system
-            max_cpu_workers = max(1, int(cpu_count * 0.75))
+            # More conservative: use only 50% of available CPUs for large datasets
+            # and cap at 16 workers maximum to avoid process pool issues
+            max_cpu_workers = max(1, min(16, int(cpu_count * 0.5)))
             
             optimal_workers = min(max_cpu_workers, memory_limited_workers)
             log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count}, "
@@ -63,8 +65,8 @@ def _get_optimal_workers(workers: int | None = None) -> int:
             # Fallback if psutil fails
             pass
     
-    # Fallback: use 75% of available CPUs
-    optimal_workers = max(1, int(cpu_count * 0.75))
+    # Fallback: use 50% of available CPUs, capped at 16 workers
+    optimal_workers = max(1, min(16, int(cpu_count * 0.5)))
     log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count})")
     return optimal_workers
 
