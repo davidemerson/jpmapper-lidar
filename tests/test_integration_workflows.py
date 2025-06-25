@@ -107,18 +107,21 @@ class TestWorkflows:
             (40.7128, -74.0060), 
             (40.7614, -73.9776),
             freq_ghz=5.8,
-            max_mast_height_m=5,
-            step_m=1,
+            from_alt=0,
+            to_alt=0,
             n_samples=256
         )
-          # Verify that the result contains the expected fields
+        
+        # Verify that the result contains the expected fields
         assert "clear" in result
-        assert "mast_height_m" in result
+        assert "mast_a_height_m" in result
+        assert "mast_b_height_m" in result
         assert "surface_height_a_m" in result
         assert "surface_height_b_m" in result
           # Verify that the result values match the mock values
         assert result["clear"] is True
-        assert result["mast_height_m"] == 0
+        assert result["mast_a_height_m"] == 0
+        assert result["mast_b_height_m"] == 0
         assert result["surface_height_a_m"] == 10
         assert result["surface_height_b_m"] == 15
         

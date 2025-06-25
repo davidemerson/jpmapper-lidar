@@ -45,38 +45,44 @@ def _get_optimal_analysis_workers(workers: Optional[int] = None) -> int:
     return optimal_workers
 
 
-def _analyze_single_row(args: Tuple[Dict[str, Any], Path, float, int]) -> Dict[str, Any]:
+def _analyze_single_row(args: Tuple[Dict[str, Any], Path, float]) -> Dict[str, Any]:
     """Analyze a single CSV row - used for parallel processing."""
-    row, dsm_path, freq_ghz, max_mast_height_m = args
+    row, dsm_path, freq_ghz = args
     
     try:
         # Extract coordinates
         point_a = (float(row.get("point_a_lat")), float(row.get("point_a_lon")))
         point_b = (float(row.get("point_b_lat")), float(row.get("point_b_lon")))
         
+        # Extract individual mast heights (default to 0 if not specified)
+        mast_a_height = float(row.get("point_a_mast", 0))
+        mast_b_height = float(row.get("point_b_mast", 0))
+        
         # Number of samples for detailed analysis
         n_samples = 256
         
-        # Analyze line of sight
+        # Analyze line of sight with individual mast heights
         analysis = analyze_los(
             dsm_path, 
             point_a, 
             point_b, 
             freq_ghz=freq_ghz,
-            max_mast_height_m=max_mast_height_m,
+            mast_a_height_m=mast_a_height,
+            mast_b_height_m=mast_b_height,
             n_samples=n_samples
         )
         
         # Get detailed profile information
-        profile_details = _get_profile_details(dsm_path, point_a, point_b, n_samples, freq_ghz)
+        profile_details = _get_profile_details(dsm_path, point_a, point_b, n_samples, freq_ghz, mast_a_height, mast_b_height)
         
         # Create result entry with enhanced information
         result = {
             "id": row.get("id", f"link_{hash(str(row))}"),
             "point_a": point_a,
             "point_b": point_b,
+            "mast_a_height_m": mast_a_height,
+            "mast_b_height_m": mast_b_height,
             "clear": analysis["clear"],
-            "mast_height_m": analysis["mast_height_m"],
             "distance_m": analysis["distance_m"],
             "surface_height_a_m": analysis.get("surface_height_a_m", 0),
             "surface_height_b_m": analysis.get("surface_height_b_m", 0),
@@ -95,16 +101,17 @@ def _analyze_single_row(args: Tuple[Dict[str, Any], Path, float, int]) -> Dict[s
             "id": row.get("id", f"link_{hash(str(row))}"),
             "point_a": (0, 0),
             "point_b": (0, 0),
+            "mast_a_height_m": 0,
+            "mast_b_height_m": 0,
             "clear": False,
-            "mast_height_m": -1,
             "distance_m": 0,
             "error": str(e)
         }
 
 
 def _get_profile_details(dsm_path: Path, point_a: Tuple[float, float], point_b: Tuple[float, float], 
-                        n_samples: int, freq_ghz: float) -> Dict[str, Any]:
-    """Get detailed profile information including obstruction analysis."""
+                        n_samples: int, freq_ghz: float, mast_a_height: float = 0, mast_b_height: float = 0) -> Dict[str, Any]:
+    """Get detailed profile information including obstruction analysis and data quality checks."""
     try:
         from jpmapper.analysis.los import profile
         import rasterio
@@ -388,7 +395,6 @@ def analyze_csv_file(
     epsg: Optional[int] = None, 
     resolution: Optional[float] = None,
     workers: Optional[int] = None,
-    max_mast_height_m: int = 5,
     output_format: str = "json",
     output_path: Optional[Path] = None,
     freq_ghz: float = 5.8
@@ -403,7 +409,6 @@ def analyze_csv_file(
         epsg: Optional EPSG code for the DSM
         resolution: Optional resolution in meters for the DSM
         workers: Optional number of workers for processing (auto-detected if None)
-        max_mast_height_m: Maximum mast height to test in meters
         output_format: Output format (json, csv, geojson)
         output_path: Optional path to save results
         freq_ghz: Frequency in GHz for Fresnel zone calculation
@@ -453,7 +458,7 @@ def analyze_csv_file(
         console.print(f"[cyan]• Workers: {analysis_workers}[/cyan]")
         console.print(f"[cyan]• DSM file: {dsm_path.name}[/cyan]")
         console.print(f"[cyan]• Frequency: {freq_ghz} GHz[/cyan]")
-        console.print(f"[cyan]• Max mast height: {max_mast_height_m}m[/cyan]")
+        console.print(f"[cyan]• Individual mast heights will be read from CSV[/cyan]")
         
         # Create progress bar for analysis
         with Progress(
@@ -473,7 +478,7 @@ def analyze_csv_file(
                 logger.info(f"Using {analysis_workers} workers for parallel analysis")
                 
                 # Prepare arguments for parallel processing
-                args_list = [(row, dsm_path, freq_ghz, max_mast_height_m) for row in rows]
+                args_list = [(row, dsm_path, freq_ghz) for row in rows]
                 
                 results = []
                 failed_count = 0
@@ -505,7 +510,7 @@ def analyze_csv_file(
                                 "id": f"failed_row_{row_idx}",
                                 "error": str(e),
                                 "clear": False,
-                                "mast_height_m": -1
+                                "distance_m": 0
                             }
                             results.append(failed_result)
                             _display_point_pair_status(failed_result, progress.console)
@@ -519,7 +524,7 @@ def analyze_csv_file(
                 
                 for i, row in enumerate(rows):
                     try:
-                        args = (row, dsm_path, freq_ghz, max_mast_height_m)
+                        args = (row, dsm_path, freq_ghz)
                         result = _analyze_single_row(args)
                         results.append(result)
                         if result.get("error"):
@@ -535,7 +540,7 @@ def analyze_csv_file(
                             "id": row.get("id", f"failed_{len(results)}"),
                             "error": str(e),
                             "clear": False,
-                            "mast_height_m": -1
+                            "distance_m": 0
                         }
                         results.append(failed_result)
                         _display_point_pair_status(failed_result, progress.console)

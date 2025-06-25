@@ -13,11 +13,14 @@ Returned tuple from `is_clear`:
 """
 from __future__ import annotations
 
+import logging
 import math
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional
 from pathlib import Path
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 import rasterio
 from pyproj import Transformer
 
@@ -431,14 +434,64 @@ def profile(
     ys = np.linspace(y1, y2, n_samples)
     ground = np.empty(n_samples, dtype=float)
     
-    # Sample elevations at each point along the line
+    # Get raster metadata for bounds checking and nodata handling
+    raster_bounds = ds.bounds
+    nodata_value = ds.nodata
+    
+    # Sample elevations at each point along the line with proper error handling
+    missing_data_count = 0
+    interpolated_count = 0
+    
     for i, (x, y) in enumerate(zip(xs, ys)):
-        row, col = ds.index(x, y)
-        try:
-            ground[i] = ds.read(1, window=((row, row+1), (col, col+1)))[0, 0]
-        except (IndexError, ValueError):
-            # If point is outside raster bounds, use nearest neighbor
-            ground[i] = 0.0
+        # Check if point is within raster bounds
+        if not (raster_bounds.left <= x <= raster_bounds.right and 
+                raster_bounds.bottom <= y <= raster_bounds.top):
+            # Point is outside raster bounds - use nearest edge value
+            # Clamp coordinates to raster bounds
+            x_clamped = max(raster_bounds.left, min(x, raster_bounds.right))
+            y_clamped = max(raster_bounds.bottom, min(y, raster_bounds.top))
+            row, col = ds.index(x_clamped, y_clamped)
+            try:
+                ground[i] = ds.read(1, window=((row, row+1), (col, col+1)))[0, 0]
+                interpolated_count += 1
+                logger.warning(f"Point ({x:.1f}, {y:.1f}) outside raster bounds, using nearest edge value")
+            except (IndexError, ValueError):
+                ground[i] = 0.0
+                missing_data_count += 1
+                logger.warning(f"Could not sample point ({x:.1f}, {y:.1f}), using 0.0m elevation")
+        else:
+            # Point is within bounds - sample with bilinear interpolation
+            try:
+                # Use rasterio's sample method for proper interpolation
+                sampled_values = list(ds.sample([(x, y)], 1, resampling='bilinear'))
+                elevation = sampled_values[0][0]
+                
+                # Check for nodata values
+                if nodata_value is not None and elevation == nodata_value:
+                    # Try nearest neighbor as fallback
+                    sampled_values = list(ds.sample([(x, y)], 1, resampling='nearest'))
+                    elevation = sampled_values[0][0]
+                    
+                    if elevation == nodata_value:
+                        # Still nodata, use 0.0 and log warning
+                        elevation = 0.0
+                        missing_data_count += 1
+                        logger.warning(f"No data available at point ({x:.1f}, {y:.1f}), using 0.0m elevation")
+                    else:
+                        interpolated_count += 1
+                
+                ground[i] = float(elevation)
+                
+            except (IndexError, ValueError, Exception) as e:
+                ground[i] = 0.0
+                missing_data_count += 1
+                logger.warning(f"Error sampling point ({x:.1f}, {y:.1f}): {e}, using 0.0m elevation")
+    
+    # Log data quality summary
+    if missing_data_count > 0:
+        logger.warning(f"Profile sampling: {missing_data_count}/{n_samples} points had missing data")
+    if interpolated_count > 0:
+        logger.info(f"Profile sampling: {interpolated_count}/{n_samples} points used interpolation/nearest neighbor")
     
     # Calculate distances
     distance = np.linspace(0, math.hypot(x2 - x1, y2 - y1), n_samples)
@@ -722,6 +775,8 @@ def is_clear(
     max_mast_height_m: int = 5,
     step_m: float = 1.0,
     n_samples: int = 256,
+    from_alt: Optional[float] = None,
+    to_alt: Optional[float] = None,
 ) -> Tuple[bool, int, float, float, float]:
     """Check if line of sight between two points is clear of obstructions.
     
@@ -732,9 +787,11 @@ def is_clear(
         point_a: First point as (latitude, longitude)
         point_b: Second point as (latitude, longitude)
         freq_ghz: Signal frequency in GHz
-        max_mast_height_m: Maximum mast height to try (m)
-        step_m: Step size for mast height search (m)
+        max_mast_height_m: Maximum mast height to try (m) - used in legacy mode
+        step_m: Step size for mast height search (m) - used in legacy mode
         n_samples: Number of points to sample along path
+        from_alt: Specific mast height at point A (m) - if provided, uses direct analysis
+        to_alt: Specific mast height at point B (m) - if provided, uses direct analysis
         
     Returns:
         Tuple containing:
@@ -775,7 +832,7 @@ def is_clear(
             
         try:
             with rasterio.open(dsm) as ds:
-                return _is_clear_points(ds, point_a, point_b, freq_ghz, max_mast_height_m, step_m, n_samples)
+                return _is_clear_points(ds, point_a, point_b, freq_ghz, max_mast_height_m, step_m, n_samples, from_alt, to_alt)
         except (rasterio.errors.RasterioIOError, FileNotFoundError):
             # For test files, return values based on context
             if "test" in str(dsm):
@@ -818,7 +875,7 @@ def is_clear(
             # Default for other test mocks
             return True, 0, 10.0, 10.0, 0.1
             
-        return _is_clear_points(ds, point_a, point_b, freq_ghz, max_mast_height_m, step_m, n_samples)
+        return _is_clear_points(ds, point_a, point_b, freq_ghz, max_mast_height_m, step_m, n_samples, from_alt, to_alt)
 
 
 def _is_clear_points(
@@ -829,6 +886,8 @@ def _is_clear_points(
     max_mast_height_m: int = 5,
     step_m: float = 1.0,
     n_samples: int = 256,
+    from_alt: Optional[float] = None,
+    to_alt: Optional[float] = None,
 ) -> Tuple[bool, int, float, float, float]:
     """Internal implementation for the API is_clear function."""
     try:
@@ -871,34 +930,51 @@ def _is_clear_points(
         # Get total snap distance (approximate)
         snap_distance = max(snap_a, snap_b)
         
-        # Try with no mast first
-        result = _is_clear_with_dataset(
-            lon_a, lat_a, 0,  # No mast height initially
-            lon_b, lat_b, 0,
-            ds, n_samples, 2.0  # Use 2m buffer for small obstacles
-        )
-        
-        if result:
-            # Clear with no mast
-            return True, 0, ground_a, ground_b, snap_distance
-            
-        # If not clear, try increasing mast heights up to max_mast_height_m
-        current_height = step_m
-        while current_height <= max_mast_height_m:
+        # Choose analysis mode based on whether specific mast heights are provided
+        if from_alt is not None and to_alt is not None:
+            # Direct analysis mode: use specific mast heights
             result = _is_clear_with_dataset(
-                lon_a, lat_a, current_height,
-                lon_b, lat_b, 0,  # Only add mast to point A
-                ds, n_samples, 2.0
+                lon_a, lat_a, from_alt,
+                lon_b, lat_b, to_alt,
+                ds, n_samples, 2.0  # Use 2m buffer for small obstacles
             )
             
             if result:
-                # Found a clear path with this mast height
-                return True, int(current_height), ground_a, ground_b, snap_distance
-                
-            current_height += step_m
+                # Path is clear with these specific mast heights
+                return True, 0, ground_a, ground_b, snap_distance
+            else:
+                # Path is blocked with these specific mast heights
+                return False, -1, ground_a, ground_b, snap_distance
+        else:
+            # Legacy mode: iterative mast height testing
+            # Try with no mast first
+            result = _is_clear_with_dataset(
+                lon_a, lat_a, 0,  # No mast height initially
+                lon_b, lat_b, 0,
+                ds, n_samples, 2.0  # Use 2m buffer for small obstacles
+            )
             
-        # No clear path found even with maximum mast height
-        return False, -1, ground_a, ground_b, snap_distance
+            if result:
+                # Clear with no mast
+                return True, 0, ground_a, ground_b, snap_distance
+                
+            # If not clear, try increasing mast heights up to max_mast_height_m
+            current_height = step_m
+            while current_height <= max_mast_height_m:
+                result = _is_clear_with_dataset(
+                    lon_a, lat_a, current_height,
+                    lon_b, lat_b, 0,  # Only add mast to point A
+                    ds, n_samples, 2.0
+                )
+                
+                if result:
+                    # Found a clear path with this mast height
+                    return True, int(current_height), ground_a, ground_b, snap_distance
+                    
+                current_height += step_m
+                
+            # No clear path found even with maximum mast height
+            return False, -1, ground_a, ground_b, snap_distance
         
     except Exception as e:
         # For tests, return special values based on context

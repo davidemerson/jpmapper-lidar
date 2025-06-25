@@ -63,14 +63,16 @@ def analyze_csv(
     las_dir: Path = typer.Option(None, "--las-dir", help="Directory containing LAS/LAZ tiles"),
     epsg: int = typer.Option(6539, help="Target EPSG (default NYC Long-Island ftUS)"),
     resolution: float = typer.Option(0.10, help="Desired DSM resolution (metres)"),
-    max_mast_height_m: int = typer.Option(5, help="Maximum mast height to test (metres)"),
-    mast_height_step_m: int = typer.Option(1, help="Mast-height step (metres)"),
     json_out: Path = typer.Option(None, help="Write raw results to JSON"),
     map_html: Path = typer.Option(None, help="Write interactive map (requires folium)"),
     cache: Path = typer.Option(None, help="Cache file for DSM raster"),
     workers: int = typer.Option(None, help="Number of worker processes"),
 ) -> List[Dict[str, Any]]:
-    """Analyze every row in the CSV and print a Rich summary table."""
+    """Analyze every row in the CSV and print a Rich summary table. 
+    
+    CSV should include columns: point_a_lat, point_a_lon, point_b_lat, point_b_lon
+    Optional columns: point_a_mast, point_b_mast (mast heights in meters)
+    """
     
     # Mock the file existence for tests
     if 'pytest' in sys.modules and not Path(points_csv).exists():
@@ -82,7 +84,6 @@ def analyze_csv(
                 epsg=epsg, 
                 resolution=resolution,
                 workers=workers,
-                max_mast_height_m=max_mast_height_m,
                 output_format="json",
                 output_path=json_out
             )
@@ -94,7 +95,6 @@ def analyze_csv(
             epsg=epsg, 
             resolution=resolution,
             workers=workers,
-            max_mast_height_m=max_mast_height_m,
             output_format="json",
             output_path=json_out
         )

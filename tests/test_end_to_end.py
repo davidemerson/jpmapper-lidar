@@ -114,7 +114,8 @@ class TestEndToEndWorkflow:
                 
                 # Assert that the result contains the expected fields
                 assert "clear" in result
-                assert "mast_height_m" in result
+                assert "mast_a_height_m" in result
+                assert "mast_b_height_m" in result
                 assert "surface_height_a_m" in result
                 assert "surface_height_b_m" in result
                 assert "distance_m" in result
@@ -191,7 +192,8 @@ class TestEndToEndWorkflow:
                             "point_b": point_b,
                             "expected_clear": expected_clear,
                             "actual_clear": result["clear"],
-                            "mast_height_m": result["mast_height_m"],
+                            "mast_a_height_m": result["mast_a_height_m"],
+                            "mast_b_height_m": result["mast_b_height_m"],
                             "distance_m": result["distance_m"]
                         })
                         
