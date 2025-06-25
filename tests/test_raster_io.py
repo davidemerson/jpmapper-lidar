@@ -93,8 +93,8 @@ class TestRasterIO:
         # Verify that the cache file was returned
         assert result == cache
     
-    @patch('jpmapper.io.raster.rasterize_tile')
-    def test_cached_mosaic_create_cache(self, mock_rasterize, tmp_path):
+    @patch('jpmapper.io.raster.rasterize_dir_parallel')
+    def test_cached_mosaic_create_cache(self, mock_rasterize_dir, tmp_path):
         """Test that cached_mosaic creates the cache file if it doesn't exist."""
         # Create a mock las directory
         las_dir = tmp_path / "las"
@@ -107,14 +107,20 @@ class TestRasterIO:
         # Setup cache path
         cache = tmp_path / "cache.tif"
         
-        # Setup mock to return the cache path
-        mock_rasterize.return_value = cache
+        # Setup mock to return list of tif files (as rasterize_dir_parallel does)
+        mock_tif = tmp_path / "temp" / "test.tif"
+        mock_rasterize_dir.return_value = [mock_tif]
         
-        # Call cached_mosaic
-        result = cached_mosaic(las_dir, cache, epsg=6539, resolution=0.1)
-        
-        # Verify that rasterize_tile was called
-        mock_rasterize.assert_called_once()
+        # Mock the merge_tiles function to avoid file operations
+        with patch('jpmapper.io.raster.merge_tiles') as mock_merge:
+            # Call cached_mosaic
+            result = cached_mosaic(las_dir, cache, epsg=6539, resolution=0.1)
+            
+            # Verify that rasterize_dir_parallel was called
+            mock_rasterize_dir.assert_called_once()
+            
+            # Verify that merge_tiles was called with the tif files
+            mock_merge.assert_called_once_with([mock_tif], cache)
         
         # Verify that the cache file was returned
         assert result == cache

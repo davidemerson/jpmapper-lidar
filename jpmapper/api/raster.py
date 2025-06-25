@@ -90,7 +90,7 @@ def rasterize_directory(
         out_dir: Directory where output GeoTIFF files will be written
         epsg: EPSG code for the output CRS
         resolution: Cell size in meters (default: 0.1m)
-        workers: Number of parallel workers. If None, uses all available CPU cores.
+        workers: Number of parallel workers. If None, auto-detects optimal number.
                  If set to 1, processing is done serially.
     
     Returns:
@@ -205,7 +205,7 @@ def create_mosaic(
         cache_path: Path where the cached mosaic will be written
         epsg: EPSG code for the output CRS
         resolution: Cell size in meters (default: 0.1m)
-        workers: Number of parallel workers. If None, uses all available CPU cores.
+        workers: Number of parallel workers. If None, auto-detects optimal number.
         force: If True, regenerate the mosaic even if the cache exists
     
     Returns:

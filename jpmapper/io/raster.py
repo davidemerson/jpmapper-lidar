@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from hashlib import md5
 from pathlib import Path
@@ -16,12 +17,81 @@ import laspy
 import rasterio
 from rasterio.merge import merge as rio_merge
 
+# Optional imports for performance optimization
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+
 try:
     from pdal import Pipeline as _PDAL_PIPELINE  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover
     _PDAL_PIPELINE = None  # noqa: N816
 
 log = logging.getLogger(__name__)
+
+
+def _get_optimal_workers(workers: int | None = None) -> int:
+    """Get optimal number of workers based on available CPU cores and memory."""
+    if workers is not None:
+        # Cap very large worker counts to be reasonable
+        cpu_count = multiprocessing.cpu_count()
+        return max(1, min(workers, cpu_count * 2))  # Cap at 2x CPU count
+    
+    # Get available CPU cores
+    cpu_count = multiprocessing.cpu_count()
+    
+    # Get available memory in GB (if psutil is available)
+    if HAS_PSUTIL:
+        try:
+            available_memory_gb = psutil.virtual_memory().available / (1024**3)
+            
+            # Conservative estimate: each worker needs ~2GB for LiDAR processing
+            memory_limited_workers = max(1, int(available_memory_gb / 2))
+            
+            # Use the minimum of CPU-limited and memory-limited workers
+            # But never exceed 75% of available CPUs to leave room for system
+            max_cpu_workers = max(1, int(cpu_count * 0.75))
+            
+            optimal_workers = min(max_cpu_workers, memory_limited_workers)
+            log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count}, "
+                    f"Available memory: {available_memory_gb:.1f}GB)")
+            return optimal_workers
+            
+        except Exception:
+            # Fallback if psutil fails
+            pass
+    
+    # Fallback: use 75% of available CPUs
+    optimal_workers = max(1, int(cpu_count * 0.75))
+    log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count})")
+    return optimal_workers
+
+
+def _optimize_gdal_cache():
+    """Set optimal GDAL cache size based on available memory."""
+    if HAS_PSUTIL:
+        try:
+            # Get available memory in MB
+            available_memory_mb = psutil.virtual_memory().available / (1024**2)
+            
+            # Use up to 25% of available memory for GDAL cache, but cap at 4GB
+            gdal_cache_mb = min(int(available_memory_mb * 0.25), 4096)
+            
+            # Minimum of 512MB
+            gdal_cache_mb = max(512, gdal_cache_mb)
+            
+            os.environ["GDAL_CACHEMAX"] = str(gdal_cache_mb)
+            log.info(f"Set GDAL cache to {gdal_cache_mb}MB")
+            return
+            
+        except Exception:
+            # Fallback if psutil fails
+            pass
+    
+    # Fallback: use 1GB default
+    os.environ.setdefault("GDAL_CACHEMAX", "1024")
 
 # ─────────────────────────── PDAL helpers ───────────────────────────────────────
 def _pipeline_dict(src: Path, dst: Path, epsg: int, res: float) -> dict:
@@ -267,10 +337,13 @@ def rasterize_dir_parallel(
     out_dir.mkdir(parents=True, exist_ok=True)
     tasks = [(p, out_dir, epsg, resolution) for p in las_files]
 
-    if workers == 1:
+    # Get optimal number of workers
+    optimal_workers = _get_optimal_workers(workers)
+    
+    if optimal_workers == 1:
         return [_rasterize_one(t) for t in tasks]
 
-    with ProcessPoolExecutor(max_workers=workers) as pool:
+    with ProcessPoolExecutor(max_workers=optimal_workers) as pool:
         return list(pool.map(_rasterize_one, tasks))
 
 # ---------- merge & cache unchanged -------------------------------------------
@@ -278,7 +351,9 @@ def merge_tiles(tifs: Sequence[Path], dst: Path) -> None:
     if not tifs:
         raise ValueError("merge_tiles() received 0 rasters")
 
-    os.environ.setdefault("GDAL_CACHEMAX", "512")  # MB
+    # Optimize GDAL cache for this operation
+    _optimize_gdal_cache()
+    
     dst.parent.mkdir(parents=True, exist_ok=True)
     
     # Check if we're in test mode
@@ -338,6 +413,9 @@ def cached_mosaic(
         mock_las = las_dir / "mock_test.las"
         mock_las.touch()
         
+    # Get optimal number of workers for parallel processing
+    optimal_workers = _get_optimal_workers(workers)
+    
     # Get the .las files
     las_files = list(las_dir.glob("*.las"))
     if not las_files:
@@ -349,11 +427,11 @@ def cached_mosaic(
         else:
             raise FileNotFoundError(f"No .las in {las_dir}")
     
-    # Rasterize the files
-    tifs = []
-    for las_file in las_files:
-        dst_tif = tmp_dir / f"{las_file.stem}.tif"
-        tifs.append(rasterize_tile(las_file, dst_tif, epsg=epsg, resolution=resolution))
+    # Process files in parallel
+    log.info(f"Processing {len(las_files)} LAS files with {optimal_workers} workers")
+    tifs = rasterize_dir_parallel(
+        las_dir, tmp_dir, epsg=epsg, resolution=resolution, workers=optimal_workers
+    )
     
     # Merge the tiles
     if tifs:

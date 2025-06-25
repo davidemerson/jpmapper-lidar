@@ -1,6 +1,38 @@
 # JPMapper-LiDAR
 
-A Python toolkit for LiDAR data filtering, rasterization, and point-to-point link analysis.
+A high-performance Python toolkit for LiDAR data processing and wireless link analysis. JPMapper specializes in filtering LAS/LAZ files, generating Digital Surface Models (DSMs), and performing line-of-sight analysis for wireless communication planning.
+
+## Key Features
+
+✅ **High-Performance Processing**: Automatic resource detection and parallel processing  
+✅ **LiDAR Data Filtering**: Filter LAS/LAZ files by geographic bounding boxes  
+✅ **DSM Generation**: Create Digital Surface Models from first-return LiDAR data  
+✅ **Line-of-Sight Analysis**: Analyze wireless link clearance with Fresnel zone calculations  
+✅ **CLI & API**: Both command-line tools and Python API for integration  
+✅ **Automatic Optimization**: Memory-aware scaling and intelligent worker management  
+✅ **Comprehensive Testing**: 80+ tests ensuring reliability and performance
+
+## Quick Start
+
+For immediate use with conda:
+
+```bash
+# Clone and setup
+git clone https://github.com/davidemerson/jpmapper-lidar.git
+cd jpmapper-lidar
+conda create -n jpmapper python=3.11
+conda activate jpmapper
+conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium psutil
+pip install -e .
+
+# Test installation
+jpmapper --help
+
+# Basic usage
+jpmapper analyze csv your_points.csv --las-dir path/to/las/files --json-out results.json
+```
+
+See [Installation](#installation-options) for detailed setup instructions.
 
 ## Building Your Environment
 
@@ -11,6 +43,26 @@ This section explains how to set up your development environment for working wit
 - Python 3.9 or newer
 - Git (for cloning the repository)
 - C/C++ compiler for some dependencies (included with Visual Studio on Windows)
+
+### System Requirements
+
+**Minimum Requirements:**
+- 4GB RAM
+- 2 CPU cores
+- 1GB free disk space
+
+**Recommended for Large Datasets:**
+- 16GB+ RAM (allows larger GDAL cache and more parallel workers)
+- 8+ CPU cores (enables efficient parallel processing)
+- SSD storage (significantly improves I/O performance)
+- 10GB+ free disk space (for temporary files and caching)
+
+**Performance Notes:**
+- JPMapper automatically scales to available resources
+- Memory usage is approximately 2GB per worker for rasterization tasks  
+- GDAL cache is automatically set to 25% of available RAM (capped at 4GB)
+- CPU usage scales to 75% of cores for rasterization, 90% for analysis tasks
+- All performance optimizations are transparent and require no manual configuration
 
 ### Installation Options
 
@@ -34,7 +86,7 @@ The recommended way to set up JPMapper is using Conda, which manages dependencie
    conda activate jpmapper
    
    # Install core dependencies from conda-forge
-   conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium
+   conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium psutil
    
    # Install development dependencies
    conda install -c conda-forge pytest pytest-cov
@@ -60,7 +112,7 @@ If you prefer using pip, you can install JPMapper with the following steps. Note
 1. **Create a virtual environment**:
    ```bash
    # Clone the repository
-   git clone https://github.com/yourusername/jpmapper-lidar.git
+   git clone https://github.com/davidemerson/jpmapper-lidar.git
    cd jpmapper-lidar
    
    # Create and activate a virtual environment
@@ -143,22 +195,104 @@ The benchmarking tools are designed to work even if some dependencies are missin
 
 ## Using the Command Line Interface
 
-JPMapper provides a command-line interface for filtering, rasterizing, and analyzing LiDAR data:
+JPMapper provides a comprehensive command-line interface for filtering, rasterizing, and analyzing LiDAR data:
+
+### Basic Commands
 
 ```bash
 # Filter LAS/LAZ files by bounding box
-jpmapper filter bbox path/to/las/files --dst path/to/output
+jpmapper filter bbox path/to/las/files --bbox "-74.01 40.70 -73.96 40.75" --dst path/to/output
 
-# Rasterize a LAS/LAZ file to a GeoTIFF DSM
-jpmapper rasterize tile input.las output.tif --epsg 6539 --resolution 0.1
+# Rasterize a single LAS/LAZ file to a GeoTIFF DSM
+jpmapper rasterize tile input.las output.tif --epsg 6539 --resolution 0.1 --workers auto
 
-# Analyze point-to-point links
-jpmapper analyze csv points.csv --las-dir path/to/las/files --json-out results.json
+# Analyze point-to-point links from a CSV file
+jpmapper analyze csv points.csv --las-dir path/to/las/files --json-out results.json --workers auto
 ```
+
+### Advanced Usage
+
+```bash
+# Analyze with custom parameters and caching
+jpmapper analyze csv points.csv \
+  --las-dir path/to/las/files \
+  --cache dsm_cache.tif \
+  --epsg 6539 \
+  --resolution 0.1 \
+  --max-mast-height-m 10 \
+  --mast-height-step-m 2 \
+  --json-out results.json \
+  --map-html interactive_map.html \
+  --workers 8
+
+# Rasterize with auto-detected CRS and custom resolution
+jpmapper rasterize tile large_file.las output.tif --resolution 0.05
+
+# Filter with specific bounding box (format: min_x min_y max_x max_y)
+jpmapper filter bbox "data/las/*.las" \
+  --bbox "-74.01 40.70 -73.96 40.75" \
+  --dst filtered_output/
+```
+
+### Performance Options
+
+All commands support automatic performance optimization:
+
+- `--workers auto` (default): Auto-detects optimal number of workers
+- `--workers N`: Use N specific worker processes  
+- When `--workers` is omitted, JPMapper automatically optimizes for your system
+
+### CSV File Format for Analysis
+
+When using the `analyze csv` command, your CSV file should have the following columns:
+
+```csv
+id,point_a_lat,point_a_lon,point_b_lat,point_b_lon
+link_1,40.7128,-74.0060,40.7614,-73.9776
+link_2,40.7589,-73.9851,40.7831,-73.9712
+```
+
+Required columns:
+- `point_a_lat`, `point_a_lon`: Latitude and longitude of the first point
+- `point_b_lat`, `point_b_lon`: Latitude and longitude of the second point
+
+Optional columns:
+- `id`: Identifier for the link (auto-generated if missing)
+- Any other columns will be preserved in the output
+
+### Output Formats
+
+JPMapper supports multiple output formats for analysis results:
+
+**JSON Output** (`--json-out results.json`):
+```json
+[
+  {
+    "id": "link_1",
+    "point_a": [40.7128, -74.0060],
+    "point_b": [40.7614, -73.9776],
+    "clear": false,
+    "mast_height_m": 3,
+    "distance_m": 5420.2,
+    "ground_height_a_m": 15.5,
+    "ground_height_b_m": 42.1,
+    "clearance_min_m": -2.3,
+    "freq_ghz": 5.8
+  }
+]
+```
+
+**Interactive Map** (`--map-html map.html`):
+- Requires `folium` package
+- Creates an interactive HTML map showing link paths
+- Color-coded by line-of-sight status (clear/blocked)
+- Click on links to see detailed analysis results
 
 ## Using the API
 
-JPMapper also provides a programmatic API for use in Python scripts:
+JPMapper provides a comprehensive programmatic API for use in Python scripts:
+
+### Basic API Usage
 
 ```python
 from pathlib import Path
@@ -169,7 +303,7 @@ las_files = list(Path("data/las").glob("*.las"))
 bbox = (-74.01, 40.70, -73.96, 40.75)  # min_x, min_y, max_x, max_y
 filtered = filter_by_bbox(las_files, bbox=bbox)
 
-# Rasterize a LAS file to a GeoTIFF DSM
+# Rasterize a LAS file to a GeoTIFF DSM with auto-optimized workers
 rasterize_tile(
     Path("data/las/tile1.las"),
     Path("data/dsm/tile1.tif"),
@@ -184,14 +318,143 @@ result = analyze_los(
     Path("data/dsm.tif"),
     point_a,
     point_b,
-    freq_ghz=5.8
+    freq_ghz=5.8,
+    max_mast_height_m=5
 )
 
 # Check if path is clear
 if result["clear"]:
     print("Path is clear!")
-else:    print(f"Path is blocked. Minimum mast height required: {result['mast_height_m']} m")
+else:
+    print(f"Path is blocked. Minimum mast height required: {result['mast_height_m']} m")
 ```
+
+### Advanced API Usage with Performance Optimization
+
+```python
+from jpmapper.api import rasterize_directory, cached_mosaic
+
+# Process multiple LAS files in parallel with auto-optimized workers
+tiff_files = rasterize_directory(
+    Path("data/las/"),
+    Path("data/tiffs/"),
+    epsg=6539,
+    resolution=0.1,
+    workers=None  # Auto-detect optimal workers
+)
+
+# Create cached mosaic with performance optimization
+mosaic_path = cached_mosaic(
+    Path("data/las/"),
+    Path("data/cached_mosaic.tif"),
+    epsg=6539,
+    resolution=0.1,
+    workers=None,  # Auto-optimized
+    force=False    # Use cache if available
+)
+
+# Analyze multiple points with performance tuning
+analysis_results = []
+for point_pair in point_pairs:
+    result = analyze_los(
+        mosaic_path,
+        point_pair[0],
+        point_pair[1],
+        freq_ghz=5.8,
+        max_mast_height_m=10,
+        n_samples=512  # Higher resolution for detailed analysis
+    )
+    analysis_results.append(result)
+```
+```
+
+## Performance Optimizations
+
+JPMapper is designed to maximize performance on any given machine by automatically utilizing available system resources. The application implements several key optimizations:
+
+### Automatic Resource Detection
+
+JPMapper automatically detects and optimizes for your system's capabilities:
+
+- **CPU Cores**: Auto-detects available CPU cores and uses up to 75% for rasterization tasks and 90% for analysis tasks
+- **Memory**: Monitors available RAM and adjusts worker processes to prevent memory exhaustion
+- **GDAL Cache**: Dynamically sets GDAL cache size to 25% of available memory (capped at 4GB) for optimal raster processing
+
+### Parallel Processing
+
+The application uses parallel processing throughout:
+
+1. **LAS Rasterization**: Multiple LAS files are processed simultaneously using `ProcessPoolExecutor`
+2. **CSV Analysis**: Point-to-point analysis of multiple rows is parallelized when processing large datasets
+3. **Memory-Aware Scaling**: Worker processes are limited based on available memory (estimated 2GB per worker for LiDAR processing)
+
+### Performance Configuration
+
+You can override automatic detection by specifying the `--workers` parameter:
+
+```bash
+# Use specific number of workers
+jpmapper analyze csv points.csv --las-dir path/to/las/files --workers 8
+
+# Let JPMapper auto-detect optimal workers (recommended)
+jpmapper analyze csv points.csv --las-dir path/to/las/files
+```
+
+### Memory Optimization
+
+- **GDAL Cache**: Automatically optimized based on available system memory
+- **Chunked Processing**: Large datasets are processed in memory-efficient chunks
+- **Resource Monitoring**: Uses `psutil` to monitor system resources and adjust processing accordingly
+
+### Benchmarking Performance
+
+Use the built-in benchmarking tools to measure performance on your system:
+
+```bash
+# Benchmark with real data to see actual performance
+python -m benchmarks.real_data_benchmarks --las-dir path/to/las/files
+
+# Benchmark API functions with synthetic data
+python -m benchmarks.api_benchmarks --iterations 5 --output-dir results/
+
+# Memory profiling for performance analysis
+python -c "
+from benchmarks.memory_profiler import MemoryProfiler
+profiler = MemoryProfiler()
+# Profile your specific workload
+results = profiler.profile(your_function, *args)
+print(f'Peak memory: {results[\"peak_usage_mb\"]:.1f} MB')
+"
+
+# Compare performance between different runs
+python -m benchmarks.compare_benchmarks old_results.json new_results.json
+```
+
+### Performance Monitoring
+
+JPMapper automatically logs performance information:
+
+```bash
+# Enable verbose logging to see performance details
+export JPMAPPER_LOG_LEVEL=INFO
+jpmapper analyze csv points.csv --las-dir data/las/
+
+# Example output:
+# INFO: Auto-detected 6 workers for rasterization (CPU cores: 8, Available memory: 15.2GB)
+# INFO: Processing 150 LAS files with 6 workers
+# INFO: Auto-detected 7 workers for analysis (CPU cores: 8)
+# INFO: Using 7 workers for parallel analysis
+# INFO: Set GDAL cache to 3840MB
+```
+
+### Performance Tips
+
+1. **SSD Storage**: Store LAS files and output on SSD for faster I/O
+2. **Memory**: More RAM allows for larger GDAL cache and more parallel workers
+3. **CPU**: Multi-core processors significantly improve processing time for large datasets
+4. **Temporary Storage**: Ensure adequate space in temp directory for intermediate files
+
+The performance optimizations are transparent to users - JPMapper will automatically use available resources efficiently without requiring manual configuration.
 
 ## Height Calculations and LiDAR Processing
 
@@ -557,6 +820,55 @@ If you encounter test failures with messages like `ImportError: cannot import na
 
 If you experience slow performance with large LiDAR datasets:
 
-1. Make sure you're using the latest versions of key dependencies (rasterio, laspy, etc.)
-2. Consider using the memory profiling tools to identify bottlenecks
-3. Check the benchmarking results to compare your performance with baseline expectations
+1. **Check available resources**: JPMapper auto-detects but you can monitor with:
+   ```bash
+   python -c "
+   from jpmapper.io.raster import _get_optimal_workers
+   from jpmapper.cli.analyze_utils import _get_optimal_analysis_workers
+   print(f'Rasterization workers: {_get_optimal_workers()}')
+   print(f'Analysis workers: {_get_optimal_analysis_workers()}')
+   "
+   ```
+
+2. **Memory optimization**: JPMapper automatically sets GDAL cache, but you can check:
+   ```bash
+   python -c "
+   from jpmapper.io.raster import _optimize_gdal_cache
+   import os
+   _optimize_gdal_cache()
+   print(f'GDAL cache: {os.environ.get(\"GDAL_CACHEMAX\")} MB')
+   "
+   ```
+
+3. **Storage optimization**: 
+   - Use SSD storage for LAS files and output
+   - Ensure adequate temp space for intermediate files
+   - Consider using `--cache` option to reuse DSM processing
+
+4. **Parallel processing**: 
+   - Large datasets benefit from more CPU cores
+   - Memory-intensive operations are automatically limited by available RAM
+   - Use `--workers 1` to disable parallelization for debugging
+
+5. **File optimization**:
+   - Compress LAS files to LAZ format to reduce I/O time
+   - Use appropriate resolution (smaller = slower but more detailed)
+   - Consider pre-filtering large datasets by geographic area
+
+6. **Monitor system resources**: Use benchmarking tools to identify bottlenecks:
+   ```bash
+   python -m benchmarks.real_data_benchmarks --las-dir path/to/data --iterations 1
+   ```
+
+### Additional Help
+
+If you encounter any issues not covered in this troubleshooting guide:
+
+1. **Check the test suite**: Run `pytest -v` to ensure all components are working correctly
+2. **Review the logs**: Enable verbose logging with `export JPMAPPER_LOG_LEVEL=DEBUG` 
+3. **Performance validation**: Use the built-in performance tests to verify optimization features:
+   ```bash
+   pytest tests/test_performance.py -v
+   ```
+
+JPMapper is designed to be robust and self-optimizing. Most performance and compatibility issues are automatically handled by the built-in optimization systems.

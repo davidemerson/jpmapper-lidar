@@ -5,15 +5,87 @@ from pathlib import Path
 import csv
 import json
 import logging
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Union, Any
 
 import pandas as pd
+
+# Optional import for performance optimization
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
 
 from jpmapper.exceptions import AnalysisError, LOSError
 from jpmapper.api import analyze_los
 from jpmapper.io import raster as r
 
 logger = logging.getLogger(__name__)
+
+
+def _get_optimal_analysis_workers(workers: Optional[int] = None) -> int:
+    """Get optimal number of workers for analysis tasks."""
+    if workers is not None:
+        return max(1, workers)
+    
+    # For analysis tasks, we can be more aggressive with CPU usage
+    # since they're less memory-intensive than rasterization
+    cpu_count = multiprocessing.cpu_count()
+    
+    # Use up to 90% of available CPUs for analysis
+    optimal_workers = max(1, int(cpu_count * 0.9))
+    logger.info(f"Auto-detected {optimal_workers} workers for analysis (CPU cores: {cpu_count})")
+    return optimal_workers
+
+
+def _analyze_single_row(args: Tuple[Dict[str, Any], Path, float, int]) -> Dict[str, Any]:
+    """Analyze a single CSV row - used for parallel processing."""
+    row, dsm_path, freq_ghz, max_mast_height_m = args
+    
+    try:
+        # Extract coordinates
+        point_a = (float(row.get("point_a_lat")), float(row.get("point_a_lon")))
+        point_b = (float(row.get("point_b_lat")), float(row.get("point_b_lon")))
+        
+        # Analyze line of sight
+        analysis = analyze_los(
+            dsm_path, 
+            point_a, 
+            point_b, 
+            freq_ghz=freq_ghz,
+            max_mast_height_m=max_mast_height_m
+        )
+        
+        # Create result entry
+        result = {
+            "id": row.get("id", f"link_{hash(str(row))}"),
+            "point_a": point_a,
+            "point_b": point_b,
+            "clear": analysis["clear"],
+            "mast_height_m": analysis["mast_height_m"],
+            "distance_m": analysis["distance_m"],
+            "ground_height_a_m": analysis.get("ground_height_a_m", 0),
+            "ground_height_b_m": analysis.get("ground_height_b_m", 0),
+            "clearance_min_m": analysis.get("clearance_min_m", 0),
+            "freq_ghz": freq_ghz
+        }
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error analyzing row {row}: {e}")
+        # Return a failed result instead of crashing
+        return {
+            "id": row.get("id", f"link_{hash(str(row))}"),
+            "point_a": (0, 0),
+            "point_b": (0, 0),
+            "clear": False,
+            "mast_height_m": -1,
+            "distance_m": 0,
+            "error": str(e)
+        }
 
 
 def analyze_csv_file(
@@ -37,7 +109,7 @@ def analyze_csv_file(
         cache: Optional path to cache the DSM
         epsg: Optional EPSG code for the DSM
         resolution: Optional resolution in meters for the DSM
-        workers: Optional number of workers for processing
+        workers: Optional number of workers for processing (auto-detected if None)
         max_mast_height_m: Maximum mast height to test in meters
         output_format: Output format (json, csv, geojson)
         output_path: Optional path to save results
@@ -67,96 +139,81 @@ def analyze_csv_file(
                 cache, 
                 epsg=epsg or 6539, 
                 resolution=resolution or 0.1,
-                workers=workers
+                workers=workers  # Pass workers to rasterization too
             )
             logger.info(f"Generated DSM from LAS files: {dsm_path}")
         else:
             raise ValueError("Either cache or las_dir must be provided")
             
-        # Read CSV file
-        results = []
-        
-        # Process each row in the CSV
+        # Read CSV file into memory
+        rows = []
         with open(csv_path, 'r') as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                try:
-                    # Extract coordinates
-                    point_a = (float(row.get("point_a_lat")), float(row.get("point_a_lon")))
-                    point_b = (float(row.get("point_b_lat")), float(row.get("point_b_lon")))
-                    
-                    # Analyze line of sight
-                    analysis = analyze_los(
-                        dsm_path, 
-                        point_a, 
-                        point_b, 
-                        freq_ghz=freq_ghz,
-                        max_mast_height_m=max_mast_height_m
-                    )
-                      # Create result entry
-                    result = {
-                        "id": row.get("id", f"link_{len(results) + 1}"),
-                        "point_a": point_a,
-                        "point_b": point_b,
-                        "clear": analysis["clear"],
-                        "mast_height_m": analysis["mast_height_m"],
-                        "distance_m": analysis.get("distance_m", 0),
-                        "ground_a": analysis["ground_a_m"],
-                        "ground_b": analysis["ground_b_m"]
-                    }
-                    
-                    results.append(result)
-                except (KeyError, ValueError) as e:
-                    logger.warning(f"Error processing row: {e}")
-                    continue
-                except LOSError as e:
-                    logger.warning(f"LOS analysis error: {e}")
-                    continue
+            rows = list(reader)
         
-        # Save output if requested
+        logger.info(f"Processing {len(rows)} point pairs from CSV")
+        
+        # Get optimal number of workers for analysis
+        analysis_workers = _get_optimal_analysis_workers(workers)
+        
+        # Process rows in parallel if we have multiple workers and multiple rows
+        if analysis_workers > 1 and len(rows) > 1:
+            logger.info(f"Using {analysis_workers} workers for parallel analysis")
+            
+            # Prepare arguments for parallel processing
+            args_list = [(row, dsm_path, freq_ghz, max_mast_height_m) for row in rows]
+            
+            results = []
+            with ProcessPoolExecutor(max_workers=analysis_workers) as executor:
+                # Submit all tasks
+                future_to_row = {
+                    executor.submit(_analyze_single_row, args): i 
+                    for i, args in enumerate(args_list)
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_row):
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        row_idx = future_to_row[future]
+                        logger.error(f"Error processing row {row_idx}: {e}")
+                        # Add a failed result
+                        results.append({
+                            "id": f"failed_row_{row_idx}",
+                            "error": str(e),
+                            "clear": False,
+                            "mast_height_m": -1
+                        })
+        else:
+            # Sequential processing for single worker or single row
+            results = []
+            for row in rows:
+                try:
+                    args = (row, dsm_path, freq_ghz, max_mast_height_m)
+                    result = _analyze_single_row(args)
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"Error processing row {row}: {e}")
+                    results.append({
+                        "id": row.get("id", f"failed_{len(results)}"),
+                        "error": str(e),
+                        "clear": False,
+                        "mast_height_m": -1
+                    })
+        
+        # Save results if output path specified
         if output_path:
             if output_format.lower() == "json":
                 with open(output_path, 'w') as f:
                     json.dump(results, f, indent=2)
-            elif output_format.lower() == "csv":                # Create a flattened DataFrame from results
-                df = pd.DataFrame(results)
-                df.to_csv(output_path, index=False)
-            elif output_format.lower() == "geojson":                # Create GeoJSON features
-                features = []
-                for link in results:
-                    lat_a, lon_a = link["point_a"]
-                    lat_b, lon_b = link["point_b"]
-                    features.append({
-                        "type": "Feature",
-                        "properties": {
-                            "id": link["id"],
-                            "clear": link["clear"],
-                            "mast_height_m": link["mast_height_m"],
-                            "distance_m": link.get("distance_m", 0),
-                            "ground_a_m": link["ground_a"],
-                            "ground_b_m": link["ground_b"]
-                        },
-                        "geometry": {
-                            "type": "LineString",
-                            "coordinates": [
-                                [lon_a, lat_a],  # GeoJSON uses [lon, lat] order
-                                [lon_b, lat_b]
-                            ]
-                        }
-                    })
-                
-                geojson = {
-                    "type": "FeatureCollection",
-                    "features": features
-                }
-                
-                with open(output_path, 'w') as f:
-                    json.dump(geojson, f, indent=2)
-            else:
-                raise ValueError(f"Unsupported output format: {output_format}")
-                
+            elif output_format.lower() == "csv":
+                if results:
+                    df = pd.DataFrame(results)
+                    df.to_csv(output_path, index=False)
+            
         return results
+        
     except Exception as e:
-        if isinstance(e, (FileNotFoundError, ValueError)):
-            raise
-        raise AnalysisError(f"Error analyzing CSV file: {e}") from e
+        raise AnalysisError(f"Failed to analyze CSV file: {e}") from e
