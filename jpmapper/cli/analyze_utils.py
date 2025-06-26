@@ -622,7 +622,7 @@ def analyze_csv_file(
         
         # Analysis complete - display summary with signal quality breakdown
         successful_count = len(results) - failed_count
-        clear_count = sum(1 for r in results if r.get("clear", False))
+        clear_count = sum(1 for result in results if result.get("clear", False))
         blocked_count = successful_count - clear_count
         
         # Calculate signal quality distribution
@@ -630,12 +630,12 @@ def analyze_csv_file(
         total_obstruction_loss = 0.0
         total_free_space_loss = 0.0
         
-        for r in results:
-            if r.get("error") or not r.get("clear", False):
+        for result in results:
+            if result.get("error") or not result.get("clear", False):
                 continue
                 
-            obs_loss = r.get("total_path_loss_db", 0.0)
-            fs_loss = r.get("free_space_path_loss_db", 0.0)
+            obs_loss = result.get("total_path_loss_db", 0.0)
+            fs_loss = result.get("free_space_path_loss_db", 0.0)
             total_obstruction_loss += obs_loss
             total_free_space_loss += fs_loss
             
@@ -654,11 +654,11 @@ def analyze_csv_file(
                 quality_counts["marginal"] += 1
         
         # Calculate averages
-        total_distance = sum(r.get("total_distance_m", 0) for r in results if "total_distance_m" in r)
+        total_distance = sum(result.get("total_distance_m", 0) for result in results if "total_distance_m" in result)
         avg_distance = total_distance / successful_count if successful_count > 0 else 0
         avg_obstruction_loss = total_obstruction_loss / clear_count if clear_count > 0 else 0
         avg_free_space_loss = total_free_space_loss / clear_count if clear_count > 0 else 0
-        total_obstructions = sum(len(r.get("obstructions", [])) for r in results)
+        total_obstructions = sum(len(result.get("obstructions", [])) for result in results)
         
         console.print(f"\n[bold green]✅ Analysis Complete![/bold green]")
         console.print(f"[green]• Total analyzed: {len(results)} point pairs[/green]")
