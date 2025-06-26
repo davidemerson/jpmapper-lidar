@@ -22,11 +22,14 @@ git clone https://github.com/davidemerson/jpmapper-lidar.git
 cd jpmapper-lidar
 conda create -n jpmapper --file requirements.txt python=3.11
 conda activate jpmapper
-conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium psutil
+conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium psutil geopandas fiona
 pip install -e .
 
 # Test installation
 jpmapper --help
+
+# Verify all dependencies and features are available
+python verify_installation.py
 
 # Basic usage
 jpmapper analyze csv your_points.csv --las-dir path/to/las/files --json-out results.json
@@ -87,7 +90,7 @@ The recommended way to set up JPMapper is using Conda, which manages dependencie
    conda activate jpmapper
    
    # Install core dependencies from conda-forge
-   conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium psutil
+   conda install -c conda-forge pdal python-pdal rasterio laspy shapely pyproj rich typer matplotlib pandas folium psutil geopandas fiona
    
    # Install development dependencies
    conda install -c conda-forge pytest pytest-cov
@@ -102,7 +105,10 @@ The recommended way to set up JPMapper is using Conda, which manages dependencie
    # Verify command-line interface works
    jpmapper --help
    
-   # Run tests
+   # Run installation verification script
+   python verify_installation.py
+   
+   # Run tests to ensure everything works
    pytest -q
    ```
 
@@ -152,6 +158,8 @@ JPMapper depends on the following key packages:
 - **laspy**: Reading and writing LAS/LAZ LiDAR files
 - **shapely**: Manipulation and analysis of geometric objects
 - **pyproj**: Cartographic projections and coordinate transformations
+- **geopandas**: Geospatial data analysis (required for metadata-aware rasterization)
+- **fiona**: Geospatial vector data I/O (required for shapefile support)
 - **rich**: Terminal formatting and display
 - **typer**: Building command-line interfaces
 - **numpy**: Numerical operations
@@ -386,6 +394,55 @@ if result["clear"]:
 else:
     print(f"Path is blocked. Minimum mast height required: {result['mast_height_m']} m")
 ```
+
+### Metadata-Aware Rasterization
+
+JPMapper includes enhanced rasterization capabilities that leverage metadata files commonly found with LiDAR datasets. When working with datasets that include shapefiles, projection files (.prj), or XML metadata, JPMapper can automatically detect and use this information for more accurate rasterization.
+
+```python
+from pathlib import Path
+from jpmapper.api import rasterize_tile_with_metadata, batch_rasterize_with_metadata
+
+# Enhanced single-file rasterization using metadata
+result_path, metadata_info = rasterize_tile_with_metadata(
+    Path("data/las/tile.las"),
+    Path("output/tile.tif"),
+    use_metadata=True,        # Enable metadata enhancement
+    auto_adjust_resolution=True  # Optimize resolution based on accuracy data
+)
+
+# Check what metadata was used
+print(f"CRS detected from: {metadata_info['crs_source']}")
+print(f"Resolution used: {metadata_info['resolution']}m")
+if 'tile_info' in metadata_info:
+    print(f"Tile ID: {metadata_info['tile_info']['LAS_ID']}")
+
+# Batch processing with metadata enhancement
+las_files = list(Path("data/las").glob("*.las"))
+results = batch_rasterize_with_metadata(
+    las_files,
+    Path("output/dsm_tiles"),
+    use_metadata=True,
+    auto_adjust_resolution=True,
+    quality_threshold=0.15,  # Quality threshold in meters
+    max_workers=4
+)
+
+# Generate processing report
+from jpmapper.api import generate_processing_report
+report = generate_processing_report(results, Path("processing_report.json"))
+
+print(f"Processed {report['summary']['total_files']} files")
+print(f"Metadata enhanced: {report['summary']['metadata_enhanced']} files")
+print(f"Resolution optimized: {report['summary']['resolution_optimized']} files")
+```
+
+**Metadata-Aware Features:**
+- **Automatic CRS Detection**: Reads projection from .prj files and shapefile metadata
+- **Tile Boundary Matching**: Uses shapefile tile index for precise boundaries
+- **Quality Assessment**: Extracts accuracy metrics from XML metadata files
+- **Resolution Optimization**: Suggests optimal resolution based on dataset accuracy
+- **Robust Fallback**: Falls back to standard processing if metadata is incomplete
 
 ### Advanced API Usage with Performance Optimization
 

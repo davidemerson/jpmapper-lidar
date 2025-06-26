@@ -31,7 +31,21 @@ logger = logging.getLogger(__name__)
 _setup_logging()
 
 app = typer.Typer(
-    help="Analyze a CSV of point-to-point links against a first-return DSM.",
+    help=(
+        "Analyze point-to-point RF links against LiDAR-derived DSM data.\n\n"
+        "Performs comprehensive line-of-sight analysis for RF planning using "
+        "high-resolution Digital Surface Models created from LAS/LAZ data. "
+        "Supports batch processing with interactive visualization.\n\n"
+        "CSV Format Requirements:\n"
+        "  Required: point_a_lat, point_a_lon, point_b_lat, point_b_lon\n"
+        "  Optional: point_a_mast, point_b_mast (mast heights in meters)\n\n"
+        "Examples:\n"
+        "  jpmapper analyze csv links.csv --las-dir data/\n"
+        "  jpmapper analyze csv points.csv --las-dir tiles/ --epsg 6539 --resolution 0.25\n"
+        "  jpmapper analyze csv network.csv --las-dir lidar/ --map-html map.html\n\n"
+        "For best results, ensure your LAS data covers all link paths with "
+        "adequate point density."
+    ),
     add_help_option=True,
 )
 
@@ -57,16 +71,58 @@ def _dsm_linear_unit(crs) -> str:  # CRS can be pyproj or rasterio CRS
     return unit
 
 
-@app.command("csv")
+@app.command(
+    "csv",
+    help=(
+        "Analyze every row in a CSV file and generate comprehensive results.\n\n"
+        "Processes point-to-point links defined in CSV format, performing "
+        "line-of-sight analysis against DSM data. Results can be output as "
+        "console tables, JSON data, or interactive HTML maps.\n\n"
+        "CSV Format:\n"
+        "  Required columns: point_a_lat, point_a_lon, point_b_lat, point_b_lon\n"
+        "  Optional columns: point_a_mast, point_b_mast (antenna heights in meters)\n\n"
+        "Examples:\n"
+        "  jpmapper analyze csv network.csv --las-dir lidar_tiles/\n"
+        "  jpmapper analyze csv links.csv --las-dir data/ --epsg 6539 --resolution 0.1\n"
+        "  jpmapper analyze csv points.csv --las-dir tiles/ --json-out results.json\n"
+        "  jpmapper analyze csv rf_links.csv --las-dir data/ --map-html interactive.html\n\n"
+        "Performance tip: Use --cache to speed up repeated analysis with the same DSM."
+    )
+)
 def analyze_csv(
-    points_csv: Path = typer.Argument(..., help="CSV with point pairs"),
-    las_dir: Path = typer.Option(None, "--las-dir", help="Directory containing LAS/LAZ tiles"),
-    epsg: int = typer.Option(6539, help="Target EPSG (default NYC Long-Island ftUS)"),
-    resolution: float = typer.Option(0.10, help="Desired DSM resolution (metres)"),
-    json_out: Path = typer.Option(None, help="Write raw results to JSON"),
-    map_html: Path = typer.Option(None, help="Write interactive map (requires folium)"),
-    cache: Path = typer.Option(None, help="Cache file for DSM raster"),
-    workers: int = typer.Option(None, help="Number of worker processes"),
+    points_csv: Path = typer.Argument(
+        ..., 
+        help="CSV file with point pairs (see command help for format details)"
+    ),
+    las_dir: Path = typer.Option(
+        None, 
+        "--las-dir", 
+        help="Directory containing LAS/LAZ tiles for DSM generation"
+    ),
+    epsg: int = typer.Option(
+        6539, 
+        help="Target EPSG code for coordinate system (default: 6539 = NYC Long Island ftUS)"
+    ),
+    resolution: float = typer.Option(
+        0.10, 
+        help="DSM cell size in meters (0.1m = high detail, 0.5m = faster processing)"
+    ),
+    json_out: Path = typer.Option(
+        None, 
+        help="Export detailed results to JSON file for further analysis"
+    ),
+    map_html: Path = typer.Option(
+        None, 
+        help="Generate interactive HTML map with link visualization (requires folium)"
+    ),
+    cache: Path = typer.Option(
+        None, 
+        help="Cache file path for DSM raster (speeds up repeated analysis)"
+    ),
+    workers: int = typer.Option(
+        None, 
+        help="Number of parallel worker processes (default: auto-detect CPU cores)"
+    ),
 ) -> List[Dict[str, Any]]:
     """Analyze every row in the CSV and print a Rich summary table. 
     

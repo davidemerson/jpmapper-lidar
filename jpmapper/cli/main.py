@@ -28,8 +28,15 @@ def _lazy(module: str):  # noqa: D401
 # ────────────────────────────────────────────────────────────────────────────
 app = typer.Typer(
     help=(
-        "JPMapper CLI – LiDAR filtering, rasterisation, and "
-        "point-to-point link analysis toolkit."
+        "JPMapper CLI – Advanced LiDAR processing toolkit for filtering, "
+        "rasterisation, and point-to-point link analysis.\n\n"
+        "Features metadata-aware rasterization, shapefile-based filtering, "
+        "and comprehensive line-of-sight analysis for RF planning.\n\n"
+        "Quick start:\n"
+        "  jpmapper filter bbox data/ --bbox '100 200 300 400'\n"
+        "  jpmapper rasterize tile input.las output.tif\n"
+        "  jpmapper analyze csv links.csv --las-dir data/\n\n"
+        "For detailed help on any command, use: jpmapper COMMAND --help"
     ),
     add_help_option=True,
 )
