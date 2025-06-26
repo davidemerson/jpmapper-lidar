@@ -215,15 +215,34 @@ def rasterize_tile(
             if src_las.exists():
                 with laspy.open(str(src_las)) as rdr:
                     crs = rdr.header.parse_crs()
-                if crs is None or crs.to_epsg() is None:
-                    # For test files that don't have CRS, use a default EPSG code
+                if crs is None:
+                    # No CRS defined at all
                     if is_test_file or (src_las.exists() and os.path.getsize(src_las) < 1000):
-                        log.warning(f"No EPSG in {src_las}, using default EPSG:6539 for testing")
+                        log.warning(f"No CRS in {src_las}, using default EPSG:6539 for testing")
                         epsg = 6539
                     else:
-                        raise ValueError(f"No EPSG in {src_las}")
+                        raise ValueError(f"No CRS in {src_las}")
                 else:
-                    epsg = int(crs.to_epsg())
+                    # Try to get EPSG from CRS
+                    epsg_code = crs.to_epsg()
+                    if epsg_code is not None:
+                        epsg = int(epsg_code)
+                    else:
+                        # Handle compound CRS (3D) - extract horizontal component
+                        crs_str = str(crs)
+                        if 'EPSG","6539"' in crs_str:
+                            log.info(f"Detected compound CRS with EPSG:6539 in {src_las}")
+                            epsg = 6539
+                        elif 'New York Long Island' in crs_str and 'ftUS' in crs_str:
+                            log.info(f"Detected NY Long Island CRS in {src_las}, using EPSG:6539")
+                            epsg = 6539
+                        else:
+                            # Unknown compound CRS
+                            if is_test_file or (src_las.exists() and os.path.getsize(src_las) < 1000):
+                                log.warning(f"Unknown compound CRS in {src_las}, using default EPSG:6539 for testing")
+                                epsg = 6539
+                            else:
+                                raise ValueError(f"Cannot extract EPSG from compound CRS in {src_las}: {crs_str[:200]}")
             else:
                 # For nonexistent files in test mode, use a default
                 if is_test_file:
