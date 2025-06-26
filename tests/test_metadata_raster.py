@@ -6,26 +6,20 @@ from unittest.mock import patch, MagicMock
 import sys
 import tempfile
 
+# Import dependency checking from conftest
+from conftest import check_geopandas_available, check_enhanced_deps_available
+
 # Test both with and without optional dependencies
-
-def _check_geopandas_available():
-    """Check if geopandas is available for import."""
-    try:
-        import geopandas
-        return True
-    except ImportError:
-        return False
-
 def test_metadata_raster_import_with_dependencies():
     """Test that metadata functions are available when dependencies are installed."""
-    try:
-        from jpmapper.io.metadata_raster import MetadataAwareRasterizer
-        from jpmapper.api.enhanced_raster import rasterize_tile_with_metadata
-        assert callable(rasterize_tile_with_metadata)
-        rasterizer = MetadataAwareRasterizer()
-        assert rasterizer is not None
-    except ImportError:
-        pytest.skip("geopandas/pyproj not available for testing")
+    if not check_enhanced_deps_available():
+        pytest.skip("Enhanced dependencies not available for testing")
+    
+    from jpmapper.io.metadata_raster import MetadataAwareRasterizer
+    from jpmapper.api.enhanced_raster import rasterize_tile_with_metadata
+    assert callable(rasterize_tile_with_metadata)
+    rasterizer = MetadataAwareRasterizer()
+    assert rasterizer is not None
 
 
 def test_metadata_raster_import_without_dependencies():
@@ -51,7 +45,7 @@ def test_metadata_raster_import_without_dependencies():
 
 
 @pytest.mark.skipif(
-    sys.modules.get('geopandas') is None, 
+    not check_geopandas_available(), 
     reason="geopandas not available"
 )
 def test_metadata_aware_rasterizer_init():
@@ -123,7 +117,7 @@ def test_find_metadata_files_no_files(tmp_path):
 
 
 @pytest.mark.skipif(
-    not _check_geopandas_available(),
+    not check_geopandas_available(),
     reason="geopandas not available"
 )
 def test_enhanced_rasterization_fallback(tmp_path):

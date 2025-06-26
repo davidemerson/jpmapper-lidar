@@ -7,21 +7,16 @@ import sys
 
 # Test both with and without geopandas availability
 
-def _check_geopandas_available():
-    """Check if geopandas is available for import."""
-    try:
-        import geopandas
-        return True
-    except ImportError:
-        return False
+# Import dependency checking from conftest
+from conftest import check_geopandas_available, check_enhanced_deps_available
 
 def test_shapefile_import_with_geopandas():
     """Test that shapefile functions are available when geopandas is installed."""
-    try:
-        from jpmapper.api.shapefile_filter import filter_by_shapefile
-        assert callable(filter_by_shapefile)
-    except ImportError:
+    if not check_geopandas_available():
         pytest.skip("geopandas not available for testing")
+    
+    from jpmapper.api.shapefile_filter import filter_by_shapefile
+    assert callable(filter_by_shapefile)
 
 
 def test_shapefile_import_without_geopandas():
@@ -47,7 +42,7 @@ def test_shapefile_import_without_geopandas():
 
 
 @pytest.mark.skipif(
-    not _check_geopandas_available(),
+    not check_geopandas_available(),
     reason="geopandas not available"
 )
 def test_filter_by_shapefile_basic(tmp_path):
@@ -219,7 +214,8 @@ def test_buffer_parameter():
         ])
         
         # Mock the filtering process to test buffer application
-        with patch('geopandas.read_file') as mock_read:
+        with patch('geopandas.read_file') as mock_read, \
+             patch('pathlib.Path.exists', return_value=True):  # Mock file existence
             mock_gdf = MagicMock()
             mock_gdf.empty = False
             mock_gdf.geometry.iloc.__getitem__.return_value = small_polygon
