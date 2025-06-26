@@ -425,8 +425,10 @@ def profile(
         wgs84_crs = 4326
         dst_crs = 'EPSG:3857'  # Web Mercator as default for tests
         tf = Transformer.from_crs(wgs84_crs, dst_crs, always_xy=True)
+        tf_inverse = Transformer.from_crs(dst_crs, wgs84_crs, always_xy=True)
     else:
         tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
+        tf_inverse = Transformer.from_crs(ds.crs, 4326, always_xy=True)
         
     x1, y1 = tf.transform(lon_a, lat_a)
     x2, y2 = tf.transform(lon_b, lat_b)
@@ -442,19 +444,42 @@ def profile(
     missing_data_count = 0
     interpolated_count = 0
     
+    def _snap_to_valid_elevation(x, y, max_search_px=10):
+        """Helper function to snap a point to nearest valid elevation data."""
+        try:
+            # Convert projected coordinates back to lat/lon for snapping function
+            lon_temp, lat_temp = tf_inverse.transform(x, y)
+            
+            # Use existing snap function to find valid data
+            (lat_snapped, lon_snapped), elevation, snap_distance = _snap_to_valid(ds, lon_temp, lat_temp, max_px=max_search_px)
+            
+            # Convert distance from degrees to meters (approximate)
+            snap_distance_m = snap_distance * 111_320  # rough conversion
+            
+            return elevation, snap_distance_m
+        except Exception:
+            return None, 0.0
+
     for i, (x, y) in enumerate(zip(xs, ys)):
         # Check if point is within raster bounds
         if not (raster_bounds.left <= x <= raster_bounds.right and 
                 raster_bounds.bottom <= y <= raster_bounds.top):
-            # Point is outside raster bounds - use nearest edge value
-            # Clamp coordinates to raster bounds
-            x_clamped = max(raster_bounds.left, min(x, raster_bounds.right))
-            y_clamped = max(raster_bounds.bottom, min(y, raster_bounds.top))
-            row, col = ds.index(x_clamped, y_clamped)
+            # Point is outside raster bounds - try snapping first
             try:
-                ground[i] = ds.read(1, window=((row, row+1), (col, col+1)))[0, 0]
-                interpolated_count += 1
-                logger.warning(f"Point ({x:.1f}, {y:.1f}) outside raster bounds, using nearest edge value")
+                elevation, snap_dist = _snap_to_valid_elevation(x, y, max_search_px=15)
+                if elevation is not None and snap_dist < 500:  # Within 500m
+                    ground[i] = elevation
+                    interpolated_count += 1
+                    if snap_dist > 100:  # Warn if snapped far
+                        logger.warning(f"Point ({x:.1f}, {y:.1f}) outside bounds, snapped {snap_dist:.0f}m to valid data")
+                else:
+                    # Fallback to edge clamping
+                    x_clamped = max(raster_bounds.left, min(x, raster_bounds.right))
+                    y_clamped = max(raster_bounds.bottom, min(y, raster_bounds.top))
+                    row, col = ds.index(x_clamped, y_clamped)
+                    ground[i] = ds.read(1, window=((row, row+1), (col, col+1)))[0, 0]
+                    interpolated_count += 1
+                    logger.warning(f"Point ({x:.1f}, {y:.1f}) outside raster bounds, using nearest edge value")
             except (IndexError, ValueError):
                 ground[i] = 0.0
                 missing_data_count += 1
@@ -463,29 +488,37 @@ def profile(
             # Point is within bounds - sample with bilinear interpolation
             try:
                 # Use rasterio's sample method for proper interpolation
-                sampled_values = list(ds.sample([(x, y)], 1, resampling='bilinear'))
+                sampled_values = list(ds.sample([(x, y)], 1))
                 elevation = sampled_values[0][0]
                 
                 # Check for nodata values
                 if nodata_value is not None and elevation == nodata_value:
-                    # Try nearest neighbor as fallback
-                    sampled_values = list(ds.sample([(x, y)], 1, resampling='nearest'))
-                    elevation = sampled_values[0][0]
-                    
-                    if elevation == nodata_value:
-                        # Still nodata, use 0.0 and log warning
-                        elevation = 0.0
+                    # Try to snap to nearest valid data instead of using 0.0
+                    snapped_elevation, snap_dist = _snap_to_valid_elevation(x, y, max_search_px=10)
+                    if snapped_elevation is not None and snap_dist < 200:  # Within 200m
+                        ground[i] = snapped_elevation
+                        interpolated_count += 1
+                        if snap_dist > 50:  # Warn if snapped more than 50m
+                            logger.info(f"Point ({x:.1f}, {y:.1f}) nodata, snapped {snap_dist:.0f}m to valid data")
+                    else:
+                        # Fall back to 0.0 if no valid data nearby
+                        ground[i] = 0.0
                         missing_data_count += 1
                         logger.warning(f"No data available at point ({x:.1f}, {y:.1f}), using 0.0m elevation")
-                    else:
-                        interpolated_count += 1
-                
-                ground[i] = float(elevation)
+                else:
+                    ground[i] = float(elevation)
                 
             except (IndexError, ValueError, Exception) as e:
-                ground[i] = 0.0
-                missing_data_count += 1
-                logger.warning(f"Error sampling point ({x:.1f}, {y:.1f}): {e}, using 0.0m elevation")
+                # Try snapping before giving up
+                snapped_elevation, snap_dist = _snap_to_valid_elevation(x, y, max_search_px=10)
+                if snapped_elevation is not None and snap_dist < 200:
+                    ground[i] = snapped_elevation
+                    interpolated_count += 1
+                    logger.info(f"Point ({x:.1f}, {y:.1f}) sampling error, snapped {snap_dist:.0f}m to valid data")
+                else:
+                    ground[i] = 0.0
+                    missing_data_count += 1
+                    logger.warning(f"Error sampling point ({x:.1f}, {y:.1f}): {e}, using 0.0m elevation")
     
     # Log data quality summary
     if missing_data_count > 0:

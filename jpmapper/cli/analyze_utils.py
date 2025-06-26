@@ -146,34 +146,58 @@ def _get_profile_details(dsm_path: Path, point_a: Tuple[float, float], point_b: 
             
             # Find obstructions and calculate signal impact
             obstructions = []
+            sample_points = []  # Store detailed height info for all sample points
             total_path_loss_db = 0.0
             max_obstruction_height = 0.0
             
             # Calculate coordinates along the path for obstruction locations
             from pyproj import Transformer
             tf_to_wgs84 = Transformer.from_crs(ds.crs, 4326, always_xy=True)
+            tf_from_wgs84 = Transformer.from_crs(4326, ds.crs, always_xy=True)
             
             for i, (dist, terrain_h, fresnel_r, los_h) in enumerate(zip(distances, terrain_heights, fresnel_radii, los_heights)):
                 # Calculate how much terrain intrudes into Fresnel zone
                 los_clearance = terrain_h - los_h  # Height above direct line-of-sight
                 fresnel_clearance = terrain_h - (los_h + fresnel_r)  # Height above full Fresnel zone
                 
+                # Calculate coordinates of this sample point
+                progress_ratio = dist / total_distance if total_distance > 0 else 0
+                
+                # Get projected coordinates along the path
+                x1, y1 = tf_from_wgs84.transform(point_a[1], point_a[0])  # lon, lat to x, y
+                x2, y2 = tf_from_wgs84.transform(point_b[1], point_b[0])
+                
+                sample_x = x1 + (x2 - x1) * progress_ratio
+                sample_y = y1 + (y2 - y1) * progress_ratio
+                
+                # Convert back to lat/lon for reporting
+                sample_lon, sample_lat = tf_to_wgs84.transform(sample_x, sample_y)
+                
+                # Calculate antenna heights at endpoints with mast heights
+                antenna_a_height = float(terrain_heights[0]) + mast_a_height if len(terrain_heights) > 0 else mast_a_height
+                antenna_b_height = float(terrain_heights[-1]) + mast_b_height if len(terrain_heights) > 0 else mast_b_height
+                
+                # Calculate actual line-of-sight height at this point (with mast heights)
+                actual_los_height = antenna_a_height + (antenna_b_height - antenna_a_height) * progress_ratio
+                
+                # Store detailed sample point information
+                sample_point = {
+                    "sample_index": i,
+                    "distance_from_start_m": float(dist),
+                    "distance_from_start_pct": float(dist / total_distance * 100) if total_distance > 0 else 0,
+                    "latitude": float(sample_lat),
+                    "longitude": float(sample_lon),
+                    "terrain_height_m": float(terrain_h),
+                    "geometric_los_height_m": float(los_h),  # Direct geometric line between endpoints
+                    "actual_los_height_m": float(actual_los_height),  # Line-of-sight including mast heights
+                    "fresnel_radius_m": float(fresnel_r),
+                    "clearance_above_terrain_m": float(actual_los_height - terrain_h),
+                    "fresnel_clearance_m": float(actual_los_height - (terrain_h + fresnel_r)),
+                    "is_obstruction": los_clearance > 0.1  # Terrain blocks direct line-of-sight
+                }
+                sample_points.append(sample_point)
+                
                 if los_clearance > 0.1:  # Terrain blocks direct line-of-sight
-                    # Calculate coordinates of this obstruction point
-                    # Interpolate between start and end points
-                    progress_ratio = dist / total_distance if total_distance > 0 else 0
-                    
-                    # Get projected coordinates along the path
-                    tf_from_wgs84 = Transformer.from_crs(4326, ds.crs, always_xy=True)
-                    x1, y1 = tf_from_wgs84.transform(point_a[1], point_a[0])  # lon, lat to x, y
-                    x2, y2 = tf_from_wgs84.transform(point_b[1], point_b[0])
-                    
-                    obs_x = x1 + (x2 - x1) * progress_ratio
-                    obs_y = y1 + (y2 - y1) * progress_ratio
-                    
-                    # Convert back to lat/lon for reporting
-                    obs_lon, obs_lat = tf_to_wgs84.transform(obs_x, obs_y)
-                    
                     # Calculate Fresnel zone blockage percentage
                     if fresnel_r > 0:
                         fresnel_blockage_pct = min(100.0, max(0.0, (los_clearance / fresnel_r) * 100))
@@ -208,10 +232,11 @@ def _get_profile_details(dsm_path: Path, point_a: Tuple[float, float], point_b: 
                     obstructions.append({
                         "distance_along_path_m": float(dist),
                         "distance_from_start_pct": float(dist / total_distance * 100) if total_distance > 0 else 0,
-                        "latitude": float(obs_lat),
-                        "longitude": float(obs_lon),
+                        "latitude": float(sample_lat),
+                        "longitude": float(sample_lon),
                         "terrain_height_m": float(terrain_h),
                         "los_height_m": float(los_h),
+                        "actual_los_height_m": float(actual_los_height),
                         "obstruction_height_m": float(los_clearance),
                         "fresnel_radius_m": float(fresnel_r),
                         "fresnel_blockage_pct": float(fresnel_blockage_pct),
@@ -254,6 +279,13 @@ def _get_profile_details(dsm_path: Path, point_a: Tuple[float, float], point_b: 
                 "terrain_profile_summary": terrain_summary,
                 "max_terrain_height_m": float(np.max(terrain_heights)) if len(terrain_heights) > 0 else 0.0,
                 "min_terrain_height_m": float(np.min(terrain_heights)) if len(terrain_heights) > 0 else 0.0,
+                "endpoint_heights": {
+                    "point_a_terrain_height_m": float(terrain_heights[0]) if len(terrain_heights) > 0 else 0.0,
+                    "point_b_terrain_height_m": float(terrain_heights[-1]) if len(terrain_heights) > 0 else 0.0,
+                    "point_a_antenna_height_m": float(terrain_heights[0]) + mast_a_height if len(terrain_heights) > 0 else mast_a_height,
+                    "point_b_antenna_height_m": float(terrain_heights[-1]) + mast_b_height if len(terrain_heights) > 0 else mast_b_height
+                },
+                "sample_points": sample_points[:50] if len(sample_points) > 50 else sample_points,  # Limit for readability but include more detail
                 "obstructions": obstructions[:15],  # Limit to first 15 obstructions for readability
                 "total_path_loss_db": total_path_loss_db,
                 "free_space_path_loss_db": free_space_path_loss_db,
@@ -385,7 +417,47 @@ def _display_point_pair_status(result: Dict[str, Any], console) -> None:
     
     # Display the status line
     console.print(f"  [{color}]{symbol} {link_id}: {quality} - {distance_str}, {samples} samples[/{color}]")
+    
+    # Show endpoint height information
+    endpoint_heights = result.get("endpoint_heights", {})
+    if endpoint_heights:
+        terrain_a = endpoint_heights.get("point_a_terrain_height_m", 0)
+        terrain_b = endpoint_heights.get("point_b_terrain_height_m", 0)
+        antenna_a = endpoint_heights.get("point_a_antenna_height_m", 0)
+        antenna_b = endpoint_heights.get("point_b_antenna_height_m", 0)
+        mast_a = antenna_a - terrain_a
+        mast_b = antenna_b - terrain_b
+        console.print(f"    [dim]Point A: {terrain_a:.1f}m terrain + {mast_a:.1f}m mast = {antenna_a:.1f}m antenna[/dim]")
+        console.print(f"    [dim]Point B: {terrain_b:.1f}m terrain + {mast_b:.1f}m mast = {antenna_b:.1f}m antenna[/dim]")
+    
     console.print(f"    [dim]{obs_desc} | {loss_desc}[/dim]")
+    
+    # Show sample point heights if verbose output is needed (controlled by result data)
+    sample_points = result.get("sample_points", [])
+    if sample_points and len(sample_points) <= 20:  # Only show for smaller sample sets
+        # Show key sample points: start, middle, end, and any obstructions
+        key_samples = []
+        if len(sample_points) > 0:
+            key_samples.append(sample_points[0])  # Start
+        if len(sample_points) > 2:
+            key_samples.append(sample_points[len(sample_points)//2])  # Middle
+        if len(sample_points) > 1:
+            key_samples.append(sample_points[-1])  # End
+        
+        # Add any obstruction points
+        obstruction_samples = [sp for sp in sample_points if sp.get("is_obstruction", False)]
+        if obstruction_samples:
+            key_samples.extend(obstruction_samples[:3])  # Add up to 3 obstruction points
+            
+        if key_samples:
+            console.print(f"    [dim]Key heights along path:[/dim]")
+            for sp in key_samples[:6]:  # Limit to 6 key points
+                dist_pct = sp.get("distance_from_start_pct", 0)
+                terrain_h = sp.get("terrain_height_m", 0)
+                actual_los_h = sp.get("actual_los_height_m", 0)
+                clearance = sp.get("clearance_above_terrain_m", 0)
+                status = "OBSTRUCTED" if sp.get("is_obstruction", False) else "clear"
+                console.print(f"      [dim]{dist_pct:5.1f}%: terrain {terrain_h:6.1f}m, LOS {actual_los_h:6.1f}m, clearance {clearance:+6.1f}m ({status})[/dim]")
 
 
 def analyze_csv_file(
