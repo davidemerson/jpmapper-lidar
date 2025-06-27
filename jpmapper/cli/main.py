@@ -50,11 +50,76 @@ def _root(ctx: typer.Context):  # noqa: D401
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Sub-commands – attached lazily
+# Sub-commands
 # ────────────────────────────────────────────────────────────────────────────
-for _name in ("filter", "rasterize", "analyze"):
+app.add_typer(_lazy("jpmapper.cli.filter").app, name="filter")
+app.add_typer(_lazy("jpmapper.cli.rasterize").app, name="rasterize")
+app.add_typer(_lazy("jpmapper.cli.analyze").app, name="analyze")
+
+@app.command()
+def debug_dsm(
+    dsm_path: str = typer.Argument(..., help="Path to DSM file"),
+    coords: str = typer.Argument(..., help="Coordinates to test as 'x,y' or multiple as 'x1,y1;x2,y2'"),
+) -> None:
+    """Debug DSM sampling at specific coordinates."""
+    import rasterio
+    import numpy as np
+    
+    coord_pairs = []
+    for coord_str in coords.split(';'):
+        x, y = map(float, coord_str.split(','))
+        coord_pairs.append((x, y))
+    
+    print(f"🔍 Testing DSM sampling at {len(coord_pairs)} coordinate(s)")
+    print(f"📁 DSM file: {dsm_path}")
+    
     try:
-        mod = _lazy(f"jpmapper.cli.{_name}")
-        app.add_typer(mod.app, name=_name, help=mod.app.info.help)  # type: ignore[attr-defined]
-    except ModuleNotFoundError:
-        logger.warning("%s CLI not found – did you add jpmapper/cli/%s.py?", _name, _name)
+        with rasterio.open(dsm_path) as ds:
+            print(f"📊 DSM info:")
+            print(f"   Shape: {ds.shape}")
+            print(f"   Bounds: {ds.bounds}")
+            print(f"   CRS: {ds.crs}")
+            print(f"   NoData: {ds.nodata}")
+            print(f"   Transform: {ds.transform}")
+            
+            # Sample a small area to check nodata distribution
+            sample_size = min(1000, ds.width, ds.height)
+            sample_data = ds.read(1, window=((0, sample_size), (0, sample_size)))
+            nodata_pct = 100 * np.sum(sample_data == ds.nodata) / sample_data.size
+            print(f"   NoData %: {nodata_pct:.1f}% (in {sample_size}x{sample_size} sample)")
+            
+            print(f"\n🎯 Testing coordinates:")
+            for i, (x, y) in enumerate(coord_pairs):
+                print(f"  {i+1}. ({x:.1f}, {y:.1f})")
+                
+                # Check bounds
+                in_bounds = (ds.bounds.left <= x <= ds.bounds.right and 
+                           ds.bounds.bottom <= y <= ds.bounds.top)
+                print(f"     In bounds: {in_bounds}")
+                
+                if in_bounds:
+                    # Sample elevation
+                    try:
+                        sampled_values = list(ds.sample([(x, y)], 1))
+                        elevation = sampled_values[0][0]
+                        is_nodata = (ds.nodata is not None and elevation == ds.nodata)
+                        print(f"     Elevation: {elevation:.1f}m {'(NODATA)' if is_nodata else '(valid)'}")
+                        
+                        # Try pixel coordinates
+                        row, col = ds.index(x, y)
+                        print(f"     Pixel: row={row}, col={col}")
+                        
+                    except Exception as e:
+                        print(f"     Error sampling: {e}")
+                else:
+                    print(f"     Outside bounds: bounds are {ds.bounds}")
+    
+    except Exception as e:
+        print(f"❌ Error opening DSM: {e}")
+
+# ────────────────────────────────────────────────────────────────────────────
+# Load commands conditionally
+# ────────────────────────────────────────────────────────────────────────────
+app.add_typer(_lazy("jpmapper.cli.filter").app, name="filter")
+app.add_typer(_lazy("jpmapper.cli.rasterize").app, name="rasterize")
+app.add_typer(_lazy("jpmapper.cli.analyze").app, name="analyze")

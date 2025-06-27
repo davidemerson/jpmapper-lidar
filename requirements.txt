@@ -17,3 +17,6 @@ psutil>=5.9.0  # For performance optimization and resource monitoring
 # Enhanced functionality dependencies (required for metadata-aware rasterization)
 geopandas>=0.14.0  # For shapefile support and metadata-aware rasterization
 fiona>=1.9.0       # For shapefile I/O
+
+# Optional enhanced mapping dependencies (for OpenStreetMap base layers)
+contextily>=1.4.0  # For web map tiles and OpenStreetMap base layers

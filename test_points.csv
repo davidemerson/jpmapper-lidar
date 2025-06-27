@@ -1,0 +1,4 @@
+point_a_lat,point_a_lon,point_a_mast,point_b_lat,point_b_lon,point_b_mast,frequency_ghz,expected_clear
+40.672699,-73.96444,2,40.696079,-73.939748,2,5.8,TRUE
+40.70569317,-73.91519213,9,40.7084572,-73.9218844,9,5.8,TRUE
+40.705228,-73.930743,2,40.693888,-73.90638,2,5.8,TRUE

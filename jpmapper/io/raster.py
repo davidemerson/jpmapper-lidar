@@ -114,6 +114,8 @@ def _pipeline_dict(src: Path, dst: Path, epsg: int, res: float) -> dict:
                 "output_type": "max",          # tallest return per pixel
                 "gdaldriver": "GTiff",
                 "spatialreference": f"EPSG:{epsg}",
+                "nodata": -9999,               # explicitly set nodata value
+                "gdalopts": "TILED=YES,COMPRESS=LZW,PREDICTOR=3",  # optimize output
             },
         ]
     }
@@ -501,11 +503,17 @@ def merge_tiles(tifs: Sequence[Path], dst: Path) -> None:
             srcs = [rasterio.open(str(t)) for t in tifs]
             
             progress.update(merge_task, completed=30, description="[magenta]Computing mosaic")
-            mosaic, transform = rio_merge(srcs, mem_limit=512)
+            # Ensure nodata value is preserved during merge
+            mosaic, transform = rio_merge(srcs, mem_limit=512, nodata=-9999)
             
             progress.update(merge_task, completed=70, description="[magenta]Writing merged DSM")
             meta = srcs[0].meta.copy()
-            meta.update(height=mosaic.shape[1], width=mosaic.shape[2], transform=transform)
+            meta.update(
+                height=mosaic.shape[1], 
+                width=mosaic.shape[2], 
+                transform=transform,
+                nodata=-9999  # Explicitly set nodata in output metadata
+            )
             
             with rasterio.open(dst, "w", **meta) as ds:
                 ds.write(mosaic)

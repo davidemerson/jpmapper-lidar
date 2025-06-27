@@ -115,6 +115,10 @@ def analyze_csv(
         None, 
         help="Generate interactive HTML map with link visualization (requires folium)"
     ),
+    map_png: Path = typer.Option(
+        None,
+        help="Generate analysis map showing DSM coverage and analyzed points (PNG format)"
+    ),
     cache: Path = typer.Option(
         None, 
         help="Cache file path for DSM raster (speeds up repeated analysis)"
@@ -141,7 +145,8 @@ def analyze_csv(
                 resolution=resolution,
                 workers=workers,
                 output_format="json",
-                output_path=json_out
+                output_path=json_out,
+                map_output=map_png
             )
     else:
         results = analyze_csv_file(
@@ -152,7 +157,8 @@ def analyze_csv(
             resolution=resolution,
             workers=workers,
             output_format="json",
-            output_path=json_out
+            output_path=json_out,
+            map_output=map_png
         )
     
     # Generate summary table if not just returning results
