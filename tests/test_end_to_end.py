@@ -11,6 +11,7 @@ from jpmapper.exceptions import JPMapperError
 
 
 @pytest.mark.integration
+@pytest.mark.requires_pdal
 class TestEndToEndWorkflow:
     """Test the entire JPMapper workflow from filtering to analysis."""
     

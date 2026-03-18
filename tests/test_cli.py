@@ -38,46 +38,28 @@ class TestCLI:
         # Verify that filter_by_bbox was called with the correct arguments
         mock_filter.assert_called_once()
     
-    @patch('jpmapper.api.raster.rasterize_tile')
-    def test_rasterize_tile_command(self, mock_api_rasterize):
+    @patch('jpmapper.cli.rasterize.api_rasterize_tile')
+    def test_rasterize_tile_command(self, mock_api_rasterize, tmp_path):
         """Test the rasterize tile command."""
-        # Setup mock to return a path
         mock_api_rasterize.return_value = Path("output.tif")
 
-        # Define a valid test LAS file path
-        test_las_path = str(Path(__file__).parent / "data" / "las" / "test_sample.las")
-        
-        # Create the test file if it doesn't exist (to ensure test runs)
-        test_file = Path(test_las_path)
-        if not test_file.exists():
-            test_file.parent.mkdir(parents=True, exist_ok=True)
-            # Create an empty file for testing
-            test_file.touch()
+        # Create a real (but small) file so the existence check passes
+        src = tmp_path / "input.las"
+        src.touch()
 
-        # Try with direct CLI invocation
         result = runner.invoke(
             rasterize_app,
             [
                 "tile",
-                test_las_path,
+                str(src),
                 "output.tif",
                 "--epsg", "6539",
                 "--resolution", "0.1"
             ]
         )
-        
-        # Print debug information
-        print(f"Exit code: {result.exit_code}")
-        print(f"Output: {result.output}")
-        if hasattr(result, 'exception') and result.exception:
-            print(f"Exception: {result.exception}")
-        
-        # Verify that the command ran successfully
+
         assert result.exit_code == 0
-        
-        # For now, skip the mock assertion since it's not being called due to how
-        # the CLI is structured and patching works
-        # mock_api_rasterize.assert_called_once()
+        mock_api_rasterize.assert_called_once()
     
     @patch('jpmapper.cli.analyze.analyze_csv_file')
     def test_analyze_csv_command(self, mock_analyze):
