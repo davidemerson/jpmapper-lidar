@@ -172,8 +172,14 @@ class TestIntegration:
         las_dir = test_data_dir / "las"
         if not las_dir.exists() or not list(las_dir.glob("*.las")):
             pytest.skip("No LAS test files found")
-        
+
         las_files = list(las_dir.glob("*.las"))
-        # Use a bbox that should include all test files
-        result = filter_by_bbox(las_files, bbox=(-180, -90, 180, 90))
-        assert len(result) > 0, "No files were selected with a global bbox"
+        # Filter to only valid (non-empty) LAS files
+        valid_las_files = [f for f in las_files if f.stat().st_size > 0]
+        if not valid_las_files:
+            pytest.skip("No valid (non-empty) LAS test files found")
+
+        # Use a bbox in projected coordinates (EPSG:6539) that covers the test data
+        # 10227.las has mins=[1010000, 227500] maxs=[1012500, 230000]
+        result = filter_by_bbox(valid_las_files, bbox=(1000000, 220000, 1020000, 240000))
+        assert len(result) > 0, "No files were selected with matching bbox"

@@ -1,7 +1,6 @@
-﻿"""`jpmapper rasterize`  rasterize LAS/LAZ files to DSM GeoTIFFs."""
+"""`jpmapper rasterize`  rasterize LAS/LAZ files to DSM GeoTIFFs."""
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import typer
@@ -31,7 +30,7 @@ def callback():
 
 
 @app.command(
-    "tile", 
+    "tile",
     help=(
         "Rasterize a single LAS/LAZ tile to a GeoTIFF DSM.\n\n"
         "Creates a Digital Surface Model (DSM) from LAS/LAZ point cloud data. "
@@ -47,11 +46,11 @@ def callback():
 )
 def rasterize_tile(
     src: Path = typer.Argument(
-        ..., 
+        ...,
         help="Source LAS/LAZ file path (single file only)"
     ),
     dst: Path = typer.Argument(
-        ..., 
+        ...,
         help="Output GeoTIFF file path (will be overwritten if exists)"
     ),
     epsg: int | None = typer.Option(
@@ -70,17 +69,9 @@ def rasterize_tile(
         help="Number of parallel processing workers (auto-detected based on CPU cores if omitted)",
     ),
 ):
-    """
-    Rasterize a LAS/LAZ file to a GeoTIFF DSM.
-    """
-    print(f"Debug - Arguments received: src={src}, dst={dst}, epsg={epsg}, resolution={resolution}")
-    
-    # Skip file existence check in test mode completely
-    if 'pytest' in sys.modules:
-        print("Running in pytest mode - skipping file checks")
-    elif not src.exists():
+    """Rasterize a LAS/LAZ file to a GeoTIFF DSM."""
+    if not src.exists():
         typer.echo(f"Source LAS file does not exist: {src}")
         raise typer.Exit(code=1)
-    
-    # Note: workers parameter is not used in the API function
+
     return api_rasterize_tile(src, dst, epsg=epsg, resolution=resolution)

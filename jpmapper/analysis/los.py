@@ -24,13 +24,16 @@ logger = logging.getLogger(__name__)
 import rasterio
 from pyproj import Transformer
 
+from jpmapper.exceptions import AnalysisError, NoDataError
+
 # --------------------------------------------------------------------------- geometry helpers
 
 
 def _first_fresnel_radius(dist: np.ndarray, freq_ghz: float) -> np.ndarray:
-    wavelength = 0.3 / freq_ghz  # λ = c / f
+    wavelength = 0.3 / freq_ghz  # lambda = c / f
     return np.sqrt(wavelength * dist / 2.0)
-    
+
+
 def _snap_to_valid(
     ds: rasterio.DatasetReader, lon: float, lat: float, max_px: int = 5
 ) -> Tuple[Tuple[float, float], float, float]:
@@ -38,134 +41,57 @@ def _snap_to_valid(
 
     Returns:
       * snapped (lat, lon)
-      * surface elevation (m, in DSM units) - first return data including buildings/structures
+      * surface elevation (m, in DSM units)
       * horizontal distance (m) between requested and snapped point
+
+    Raises:
+      NoDataError: if no valid data found within search radius
     """
-    # Check if ds is a MagicMock (for testing) or a closed dataset
-    is_mock = hasattr(ds, '_extract_mock_name') or hasattr(ds.crs, '_extract_mock_name')
-    is_closed = hasattr(ds, 'closed') and ds.closed
-    
-    # For closed datasets or test files, return synthetic values
-    if is_closed or ("test" in str(ds.name) if hasattr(ds, 'name') else False):
-        # Return original coordinates with a default elevation
-        return (lat, lon), 10.0, 0.1
-    
-    # Setup transformers based on dataset type
-    if is_mock:
-        # Use default CRS string for testing
-        wgs84_crs = 4326
-        dst_crs = 'EPSG:3857'  # Web Mercator as default for tests
-        tf_wgs84_to_dsm = Transformer.from_crs(wgs84_crs, dst_crs, always_xy=True)
-        tf_dsm_to_wgs84 = Transformer.from_crs(dst_crs, wgs84_crs, always_xy=True)
-    else:
-        tf_wgs84_to_dsm = Transformer.from_crs(4326, ds.crs, always_xy=True)
-        tf_dsm_to_wgs84 = Transformer.from_crs(ds.crs, 4326, always_xy=True)
-    
-    # Transform coordinates
+    tf_wgs84_to_dsm = Transformer.from_crs(4326, ds.crs, always_xy=True)
+    tf_dsm_to_wgs84 = Transformer.from_crs(ds.crs, 4326, always_xy=True)
+
     x, y = tf_wgs84_to_dsm.transform(lon, lat)
-    
-    # Handle mock datasets differently to avoid accessing missing attributes
-    if is_mock:
-        # For tests, use simple values that work with mocks
-        try:
-            # Scale coordinates based on our test setup (100x100 grid with 0-10 range)
-            col = int(min(max(0, round(lon * 10)), 99))
-            row = int(min(max(0, round(lat * 10)), 99))
-            
-            # Return mock values for testing
-            nodata = ds.nodata if hasattr(ds, 'nodata') and ds.nodata is not None else -9999
-            
-            # For testing, use the original coordinates
-            lon_valid, lat_valid = lon, lat
-            
-            # Check if this is a "clear path" test with all zeros in the dataset
-            if hasattr(ds.read, 'return_value') and isinstance(ds.read.return_value, np.ndarray):
-                # Check if we have an all-zeros array (clear path test)
-                if ds.read.return_value.size > 0 and np.all(ds.read.return_value == 0):
-                    # This is the clear path test
-                    elev = 0.0
-                else:
-                    # This is the "hill" test for compute_profile or blocked path
-                    # Create a synthetic elevation that has a hill in the middle
-                    # Higher elevation in the middle (around 50,50), lower at edges
-                    elev = 10.0 + 20.0 * np.exp(-0.002 * ((row - 50) ** 2 + (col - 50) ** 2))
-            else:
-                # Try to get elevation directly from a read operation
-                try:
-                    window = ds.read(
-                        1,
-                        window=((row, row + 1), (col, col + 1)),
-                        boundless=True,
-                        fill_value=nodata,
-                    )
-                    
-                    # Handle different window shapes
-                    if window.ndim == 3:
-                        window = window[0]
-                    
-                    elev = float(window[0, 0])
-                except Exception:
-                    # Fallback for any read errors
-                    elev = 10.0  # Constant elevation for simplicity
-            
-            dx = 0.1  # Small snapping distance for tests to pass expectations
+
+    col = int(round((x - ds.transform.c) / ds.transform.a))
+    row = int(round((y - ds.transform.f) / ds.transform.e))
+
+    nodata = ds.nodata if ds.nodata is not None else -9999
+
+    for d in range(max_px + 1):
+        window = ds.read(
+            1,
+            window=((row - d, row + d + 1), (col - d, col + d + 1)),
+            boundless=True,
+            fill_value=nodata,
+        )
+
+        if window.ndim == 3:
+            window = window[0]
+
+        mask = window != nodata
+        if mask.any():
+            r_off, c_off = np.argwhere(mask)[0]
+            r_valid, c_valid = row - d + r_off, col - d + c_off
+            x_valid = ds.transform.c + c_valid * ds.transform.a
+            y_valid = ds.transform.f + r_valid * ds.transform.e
+            lon_valid, lat_valid = tf_dsm_to_wgs84.transform(x_valid, y_valid)
+
+            elev_window = ds.read(
+                1,
+                window=((r_valid, r_valid + 1), (c_valid, c_valid + 1)),
+                boundless=True,
+                fill_value=nodata,
+            )
+            if elev_window.ndim == 3:
+                elev_window = elev_window[0]
+
+            elev = float(elev_window[0, 0])
+            dx = math.hypot(lon_valid - lon, lat_valid - lat) * 111_320  # ~ m per deg
             return (lat_valid, lon_valid), elev, dx
-        except Exception as e:
-            # If anything goes wrong with the mock handling, return safe values
-            return (lat, lon), 10.0, 0.1
-    else:
-        try:
-            # Real processing for actual datasets
-            col = int(round((x - ds.transform.c) / ds.transform.a))
-            row = int(round((y - ds.transform.f) / ds.transform.e))
-            
-            nodata = ds.nodata if ds.nodata is not None else -9999
-            
-            # Search for valid data in increasingly larger windows
-            for d in range(max_px + 1):
-                window = ds.read(
-                    1,
-                    window=((row - d, row + d + 1), (col - d, col + d + 1)),
-                    boundless=True,
-                    fill_value=nodata,
-                )
-                
-                # Handle different window shapes
-                if window.ndim == 3:
-                    # Handle 3D arrays (common in tests with mock data)
-                    window = window[0]  # Take the first band
-                
-                mask = window != nodata
-                if mask.any():
-                    r_off, c_off = np.argwhere(mask)[0]
-                    r_valid, c_valid = row - d + r_off, col - d + c_off
-                    x_valid = ds.transform.c + c_valid * ds.transform.a
-                    y_valid = ds.transform.f + r_valid * ds.transform.e
-                    lon_valid, lat_valid = tf_dsm_to_wgs84.transform(x_valid, y_valid)
-                    
-                    # Read elevation at the valid point
-                    elev_window = ds.read(
-                        1,
-                        window=((r_valid, r_valid + 1), (c_valid, c_valid + 1)),
-                        boundless=True,
-                        fill_value=nodata,
-                    )
-                    
-                    # Handle 3D arrays in test mocks
-                    if elev_window.ndim == 3:
-                        elev_window = elev_window[0]
-                    
-                    elev = float(elev_window[0, 0])
-                    dx = math.hypot(lon_valid - lon, lat_valid - lat) * 111_320  # ~ m per deg
-                    return (lat_valid, lon_valid), elev, dx
-            
-            # If we get here, we didn't find a valid point, but we'll return synthetic values for tests
-            # to avoid test failures when datasets can't provide real values
-            return (lat, lon), 10.0, 0.1
-            
-        except Exception as e:
-            # Return synthetic values for any exceptions
-            return (lat, lon), 10.0, 0.1
+
+    raise NoDataError(
+        f"No valid DSM data within {max_px} pixels of ({lat:.6f}, {lon:.6f})"
+    )
 
 
 # --------------------------------------------------------------------------- public API
@@ -184,8 +110,6 @@ def is_clear_direct(
     snap_max_px: int = 10,
 ) -> bool:
     """Check if line of sight between two points is clear of obstructions.
-    
-    This is the direct implementation that doesn't use the API/test interface.
 
     Args:
         from_lon: WGS84 longitude of start point
@@ -194,106 +118,28 @@ def is_clear_direct(
         to_lon: WGS84 longitude of end point
         to_lat: WGS84 latitude of end point
         to_alt: altitude of end point (m)
-        dsm_file: path to digital surface model (DSM) GeoTIFF
-                  Can also be a rasterio.DatasetReader if already open
-        n_samples: number of points to sample along path for LoS check
+        dsm_file: path to DSM GeoTIFF or open rasterio dataset
+        n_samples: number of points to sample along path
         alt_buffer_m: buffer (m) to add to points to clear small obstacles
         snap_max_px: max search distance for finding valid DSM cells
 
     Returns:
         True if line of sight is clear of obstructions
     """
-    # Check if this is a test mock
-    is_test = False
     if isinstance(dsm_file, (str, Path)):
-        is_test = "test" in str(dsm_file)
+        with rasterio.open(dsm_file) as ds:
+            return _is_clear_with_dataset(
+                from_lon, from_lat, from_alt,
+                to_lon, to_lat, to_alt,
+                ds, n_samples, alt_buffer_m, snap_max_px
+            )
     else:
-        is_test = (hasattr(dsm_file, '_extract_mock_name') or 
-                  (hasattr(dsm_file, 'name') and "test" in str(dsm_file.name)))
-                  
-    # Special handling for test mocks
-    if is_test:
-        # Return True for most test cases
-        if isinstance(dsm_file, (str, Path)):
-            # For blocked path tests in file paths
-            if "blocked_path" in str(dsm_file) or "mast" in str(dsm_file):
-                if from_alt == 0:  # No mast
-                    return False
-                else:
-                    return True
-            return True
-        else:
-            # For dataset objects
-            ds = dsm_file
-            # For blocked path tests
-            if hasattr(ds, 'name') and ('blocked_path' in str(ds.name) or 'mast' in str(ds.name)):
-                if from_alt == 0:  # No mast
-                    return False
-                else:
-                    return True
-                    
-            # Check for clear path tests (all zeros)
-            if hasattr(ds, 'read') and hasattr(ds.read, 'return_value') and isinstance(ds.read.return_value, np.ndarray):
-                if ds.read.return_value.size > 0 and np.all(ds.read.return_value == 0):
-                    # For clear path tests, always return True
-                    return True
-            
-            # Default for other test mocks
-            return True
-                
-    # Handle dsm_file as path or dataset
-    if isinstance(dsm_file, (str, Path)):
-        try:
-            # Convert to Path object to normalize and handle string paths
-            dsm_path = Path(dsm_file)
-            # If testing or the file doesn't exist, return True to help tests pass
-            if "test" in str(dsm_path) or not dsm_path.exists():
-                return True
-                
-            # Open the dataset
-            with rasterio.open(dsm_path) as ds:
-                return _is_clear_with_dataset(
-                    from_lon, from_lat, from_alt,
-                    to_lon, to_lat, to_alt,
-                    ds, n_samples, alt_buffer_m, snap_max_px
-                )
-        except (rasterio.errors.RasterioIOError, FileNotFoundError) as e:
-            # For test files or missing files, return True to avoid breaking tests
-            if "test" in str(dsm_file):
-                return True
-            # Otherwise, re-raise the exception
-            raise e
-    else:
-        # It's already a dataset
-        ds = dsm_file
-        
-        # Check if it's a mock (for tests) or closed dataset
-        is_mock = hasattr(ds, '_extract_mock_name')
-        is_closed = hasattr(ds, 'closed') and ds.closed
-        
-        # If it's a test mock or closed dataset, handle specially
-        if is_mock or is_closed or (hasattr(ds, 'name') and "test" in str(ds.name)):
-            # For blocked path tests
-            if hasattr(ds, 'name') and ('blocked_path' in str(ds.name) or 'mast' in str(ds.name)):
-                if from_alt == 0:  # No mast
-                    return False
-                else:
-                    return True
-                    
-            # For clear path tests
-            if hasattr(ds, 'read') and hasattr(ds.read, 'return_value') and isinstance(ds.read.return_value, np.ndarray):
-                if ds.read.return_value.size > 0 and np.all(ds.read.return_value == 0):
-                    return True
-            
-            # Default for other test mocks
-            return True
-            
-        # Use the dataset directly
         return _is_clear_with_dataset(
             from_lon, from_lat, from_alt,
             to_lon, to_lat, to_alt,
-            ds, n_samples, alt_buffer_m, snap_max_px
+            dsm_file, n_samples, alt_buffer_m, snap_max_px
         )
+
 
 def _is_clear_with_dataset(
     from_lon: float,
@@ -307,89 +153,28 @@ def _is_clear_with_dataset(
     alt_buffer_m: float = 2.0,
     snap_max_px: int = 10,
 ) -> bool:
-    """Implementation of is_clear using an open dataset.
-    
-    Separated to avoid code duplication in the is_clear function.
-    """
-    try:
-        # Check if it's a mock (for tests) or closed dataset
-        is_mock = hasattr(ds, '_extract_mock_name') or hasattr(ds.crs, '_extract_mock_name')
-        is_closed = hasattr(ds, 'closed') and ds.closed
-        
-        # For tests or closed datasets, handle specially
-        if is_mock or is_closed or (hasattr(ds, 'name') and "test" in str(ds.name)):
-            # Mocked responses for blocked path tests
-            if hasattr(ds, 'name'):
-                if 'blocked_path' in str(ds.name):
-                    # This is a test with a blocked path
-                    return False
-                elif 'mast' in str(ds.name) and from_alt == 0:
-                    # This is a test with a mast needed and no mast height
-                    return False
-                elif 'mast' in str(ds.name) and from_alt > 0:
-                    # This is a test with a mast needed and mast height provided
-                    return True
-                
-            # For clear path tests (all zeros)
-            if is_mock and hasattr(ds.read, 'return_value') and isinstance(ds.read.return_value, np.ndarray):
-                if ds.read.return_value.size > 0 and np.all(ds.read.return_value == 0):
-                    # For clear path tests, always return True
-                    return True
-            
-            # Default for other test mocks
-            return True
-        
-        # Snap the start and end points to the nearest valid DSM cell
-        (from_lat_valid, from_lon_valid), from_ground_alt, from_dx = _snap_to_valid(
-            ds, from_lon, from_lat, max_px=snap_max_px
-        )
-        (to_lat_valid, to_lon_valid), to_ground_alt, to_dx = _snap_to_valid(
-            ds, to_lon, to_lat, max_px=snap_max_px
-        )
-        
-        # The points might have been snapped differently, so we need to
-        # recompute the elevation for them
-        from_alt_adjusted = from_alt + from_ground_alt
-        to_alt_adjusted = to_alt + to_ground_alt
-        
-        # Compute the elevation profile - note the return values have changed
-        distances, elevations, total_distance = compute_profile(
-            ds,
-            (from_lat_valid, from_lon_valid),
-            (to_lat_valid, to_lon_valid),
-            n_samples=n_samples,
-        )
+    """Implementation of is_clear using an open dataset."""
+    (from_lat_valid, from_lon_valid), from_ground_alt, from_dx = _snap_to_valid(
+        ds, from_lon, from_lat, max_px=snap_max_px
+    )
+    (to_lat_valid, to_lon_valid), to_ground_alt, to_dx = _snap_to_valid(
+        ds, to_lon, to_lat, max_px=snap_max_px
+    )
 
-        # Construct linear path in 3D
-        # x is now normalized based on distance
-        x = distances / total_distance  # normalized distance 0..1
-        surface_y = elevations  # surface elevation (m) along path from DSM first returns
+    from_alt_adjusted = from_alt + from_ground_alt
+    to_alt_adjusted = to_alt + to_ground_alt
 
-        # Line equation from start to end: (1-t)*start + t*end where t is 0..1
-        los_y = (1 - x) * from_alt_adjusted + x * to_alt_adjusted
+    distances, elevations, total_distance = compute_profile(
+        ds,
+        (from_lat_valid, from_lon_valid),
+        (to_lat_valid, to_lon_valid),
+        n_samples=n_samples,
+    )
 
-        # Check for intersections between LoS and DSM surface
-        # Apply buffer to allow small obstructions
-        if (los_y - alt_buffer_m > surface_y).all():
-            return True
-        else:
-            return False
-    except Exception as e:
-        # For tests, if there's any exception, handle based on context
-        if hasattr(ds, '_extract_mock_name') or (hasattr(ds, 'name') and "test" in str(ds.name)):
-            # Special handling for blocked_path tests
-            if hasattr(ds, 'name') and 'blocked_path' in str(ds.name):
-                return False
-            # Special handling for mast tests
-            elif hasattr(ds, 'name') and 'mast' in str(ds.name):
-                if from_alt > 0:
-                    return True
-                else:
-                    return False
-            # Default for other test files
-            return True
-        # Otherwise, re-raise the exception
-        raise e
+    x = distances / total_distance  # normalized distance 0..1
+    los_y = (1 - x) * from_alt_adjusted + x * to_alt_adjusted
+
+    return bool((los_y - alt_buffer_m > elevations).all())
 
 
 def profile(
@@ -399,172 +184,101 @@ def profile(
     n_samples: int = 256,
     freq_ghz: float = 5.8,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Generate terrain and Fresnel zone profile between two points.
-    
+    """Generate terrain and Fresnel zone profile between two points.
+
     Args:
         ds: Raster dataset (DSM)
         pt_a: First point as (latitude, longitude)
         pt_b: Second point as (latitude, longitude)
         n_samples: Number of points to sample along the path
         freq_ghz: Frequency in GHz
-    
+
     Returns:
-        Tuple containing:
-        - distances_m: Array of distances along the path in meters
-        - terrain_heights_m: Array of terrain heights in meters
-        - fresnel_radii_m: Array of Fresnel zone radii in meters
+        Tuple of (distances_m, terrain_heights_m, fresnel_radii_m)
     """
     (lat_a, lon_a), gA, _ = _snap_to_valid(ds, pt_a[1], pt_a[0])
     (lat_b, lon_b), gB, _ = _snap_to_valid(ds, pt_b[1], pt_b[0])
-    
-    # Sample elevations
-    # Check if ds.crs is a MagicMock (for testing)
-    if hasattr(ds.crs, '_extract_mock_name'):
-        # Use a default CRS string for testing
-        wgs84_crs = 4326
-        dst_crs = 'EPSG:3857'  # Web Mercator as default for tests
-        tf = Transformer.from_crs(wgs84_crs, dst_crs, always_xy=True)
-        tf_inverse = Transformer.from_crs(dst_crs, wgs84_crs, always_xy=True)
-    else:
-        tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
-        tf_inverse = Transformer.from_crs(ds.crs, 4326, always_xy=True)
-        
+
+    tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
+
     x1, y1 = tf.transform(lon_a, lat_a)
     x2, y2 = tf.transform(lon_b, lat_b)
     xs = np.linspace(x1, x2, n_samples)
     ys = np.linspace(y1, y2, n_samples)
     ground = np.empty(n_samples, dtype=float)
-    
-    # Get raster metadata for bounds checking and nodata handling
+
     raster_bounds = ds.bounds
     nodata_value = ds.nodata
-    
-    # Sample elevations at each point along the line with proper error handling
-    missing_data_count = 0
-    interpolated_count = 0
-    
-    def _snap_to_valid_elevation(x, y, max_search_px=10):  # Reduced max search for 2m limit
-        """Helper function to snap a point to nearest valid elevation data using pixel-based search within 2m."""
+
+    def _snap_to_valid_elevation(x, y, max_search_px=10):
+        """Snap a point to nearest valid elevation data within 2m."""
         try:
-            # Convert world coordinates to pixel coordinates
             row, col = ds.index(x, y)
-            
-            # First check if we're out of bounds
+
             if row < 0 or row >= ds.height or col < 0 or col >= ds.width:
                 return None, 0.0
-            
-            # Search in expanding squares around the target pixel
+
             for search_radius in range(1, max_search_px + 1):
                 valid_pixels = []
-                
-                # Collect all valid pixels at this radius
                 for dr in range(-search_radius, search_radius + 1):
                     for dc in range(-search_radius, search_radius + 1):
-                        # Only check pixels on the edge of the current search radius
                         if abs(dr) != search_radius and abs(dc) != search_radius:
                             continue
-                            
+
                         test_row = row + dr
                         test_col = col + dc
-                        
-                        # Check bounds
+
                         if 0 <= test_row < ds.height and 0 <= test_col < ds.width:
                             try:
-                                # Read single pixel value
                                 pixel_val = ds.read(1, window=((test_row, test_row+1), (test_col, test_col+1)))[0, 0]
-                                
-                                # Check if it's valid data
                                 if nodata_value is None or pixel_val != nodata_value:
                                     distance_px = math.sqrt(dr*dr + dc*dc)
-                                    distance_m = distance_px * abs(ds.transform[0])  # pixel size in meters
-                                    valid_pixels.append((float(pixel_val), distance_m, dr, dc))
-                                    
+                                    distance_m = distance_px * abs(ds.transform[0])
+                                    valid_pixels.append((float(pixel_val), distance_m))
                             except Exception:
                                 continue
-                
-                # If we found valid pixels at this radius, check if within 2m limit
+
                 if valid_pixels:
-                    # Sort by distance and return the closest within 2m
-                    valid_pixels.sort(key=lambda x: x[1])
-                    closest_elev, closest_dist, dr, dc = valid_pixels[0]
-                    if closest_dist <= 2.0:  # Strict 2m limit
+                    valid_pixels.sort(key=lambda p: p[1])
+                    closest_elev, closest_dist = valid_pixels[0]
+                    if closest_dist <= 2.0:
                         return closest_elev, closest_dist
-                    # If even the closest is beyond 2m, continue searching for something closer
-            
+
             return None, 0.0
-            
         except Exception:
             return None, 0.0
 
     for i, (x, y) in enumerate(zip(xs, ys)):
-        # Check if point is within raster bounds
-        if not (raster_bounds.left <= x <= raster_bounds.right and 
+        if not (raster_bounds.left <= x <= raster_bounds.right and
                 raster_bounds.bottom <= y <= raster_bounds.top):
-            # Point is outside raster bounds - try snapping within strict 2m limit
-            try:
-                elevation, snap_dist = _snap_to_valid_elevation(x, y, max_search_px=10)  # ~2m search
-                if elevation is not None and snap_dist <= 2.0:  # Strict 2m limit
-                    ground[i] = elevation
-                    interpolated_count += 1
-                    logger.info(f"Point ({x:.1f}, {y:.1f}) outside bounds, snapped {snap_dist:.1f}m to valid data")
-                else:
-                    # No valid data within 2m - use 0.0 and log as missing
-                    ground[i] = 0.0
-                    missing_data_count += 1
-                    logger.warning(f"Point ({x:.1f}, {y:.1f}) outside bounds, no valid data within 2m, using 0.0m elevation")
-            except (IndexError, ValueError):
+            elevation, snap_dist = _snap_to_valid_elevation(x, y)
+            if elevation is not None and snap_dist <= 2.0:
+                ground[i] = elevation
+            else:
                 ground[i] = 0.0
-                missing_data_count += 1
-                logger.warning(f"Could not sample point ({x:.1f}, {y:.1f}), using 0.0m elevation")
         else:
-            # Point is within bounds - sample with bilinear interpolation
             try:
-                # Use rasterio's sample method for proper interpolation
                 sampled_values = list(ds.sample([(x, y)], 1))
                 elevation = sampled_values[0][0]
-                
-                # Check for nodata values
+
                 if nodata_value is not None and elevation == nodata_value:
-                    # Try to snap to nearest valid data within strict 2m limit
-                    snapped_elevation, snap_dist = _snap_to_valid_elevation(x, y, max_search_px=10)  # ~2m search
-                    if snapped_elevation is not None and snap_dist <= 2.0:  # Strict 2m limit
+                    snapped_elevation, snap_dist = _snap_to_valid_elevation(x, y)
+                    if snapped_elevation is not None and snap_dist <= 2.0:
                         ground[i] = snapped_elevation
-                        interpolated_count += 1
-                        logger.info(f"Point ({x:.1f}, {y:.1f}) nodata, snapped {snap_dist:.1f}m to valid data")
                     else:
-                        # No valid data within 2m - use 0.0 and log as missing
                         ground[i] = 0.0
-                        missing_data_count += 1
-                        logger.warning(f"No data available within 2m at point ({x:.1f}, {y:.1f}), using 0.0m elevation")
                 else:
                     ground[i] = float(elevation)
-                
-            except (IndexError, ValueError, Exception) as e:
-                # Try snapping within strict 2m limit before giving up
-                snapped_elevation, snap_dist = _snap_to_valid_elevation(x, y, max_search_px=10)  # ~2m search
-                if snapped_elevation is not None and snap_dist <= 2.0:  # Strict 2m limit
+            except Exception:
+                snapped_elevation, snap_dist = _snap_to_valid_elevation(x, y)
+                if snapped_elevation is not None and snap_dist <= 2.0:
                     ground[i] = snapped_elevation
-                    interpolated_count += 1
-                    logger.info(f"Point ({x:.1f}, {y:.1f}) sampling error, snapped {snap_dist:.1f}m to valid data")
                 else:
-                    # No valid data within 2m - use 0.0 and log as missing
                     ground[i] = 0.0
-                    missing_data_count += 1
-                    logger.warning(f"Error sampling point ({x:.1f}, {y:.1f}): {e}, no valid data within 2m, using 0.0m elevation")
-    
-    # Log data quality summary
-    if missing_data_count > 0:
-        logger.warning(f"Profile sampling: {missing_data_count}/{n_samples} points had missing data")
-    if interpolated_count > 0:
-        logger.info(f"Profile sampling: {interpolated_count}/{n_samples} points used interpolation/nearest neighbor")
-    
-    # Calculate distances
+
     distance = np.linspace(0, math.hypot(x2 - x1, y2 - y1), n_samples)
-    
-    # Calculate Fresnel zone radius
     fresnel = _first_fresnel_radius(distance, freq_ghz)
-    
+
     return distance, ground, fresnel
 
 
@@ -574,60 +288,29 @@ def compute_profile(
     point_b: Tuple[float, float],
     n_samples: int = 256,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
-    """
-    Compute terrain profile between two points.
-    
+    """Compute terrain profile between two points.
+
     Args:
         dsm_path: Path to DSM GeoTIFF file or open dataset
         point_a: First point as (latitude, longitude)
         point_b: Second point as (latitude, longitude)
         n_samples: Number of samples along the path
-        
+
     Returns:
-        Tuple containing:
-        - distances_m: Array of distances along the path in meters
-        - terrain_heights_m: Array of terrain heights in meters
-        - total_distance_m: Total distance between points in meters
-        
+        Tuple of (distances_m, terrain_heights_m, total_distance_m)
+
     Raises:
         AnalysisError: If there's an error processing the DSM
     """
-    from jpmapper.exceptions import AnalysisError
-    
-    # Determine if this is a test path or dataset
-    is_test = False
-    if isinstance(dsm_path, (str, Path)):
-        is_test = "test" in str(dsm_path)
-    else:
-        # It's a dataset
-        is_test = (hasattr(dsm_path, '_extract_mock_name') or 
-                  (hasattr(dsm_path, 'name') and "test" in str(dsm_path.name)))
-    
-    # For test files that don't exist, return synthetic data
-    if isinstance(dsm_path, (str, Path)) and is_test and not Path(dsm_path).exists():
-        return _create_synthetic_profile_data(n_samples)
-    
     try:
-        # If dsm_path is already a dataset
         if not isinstance(dsm_path, (str, Path)):
-            ds = dsm_path
+            return _compute_profile_with_dataset(dsm_path, point_a, point_b, n_samples)
+
+        with rasterio.open(dsm_path) as ds:
             return _compute_profile_with_dataset(ds, point_a, point_b, n_samples)
-            
-        # Try to open the dataset
-        try:
-            with rasterio.open(dsm_path) as ds:
-                # Process with the open dataset
-                return _compute_profile_with_dataset(ds, point_a, point_b, n_samples)
-        except (rasterio.errors.RasterioIOError, FileNotFoundError):
-            # For test files, return synthetic data
-            if is_test:
-                return _create_synthetic_profile_data(n_samples)
-            raise  # Re-raise for non-test files
+    except (AnalysisError, NoDataError):
+        raise
     except Exception as e:
-        # For test files, return synthetic data
-        if is_test:
-            return _create_synthetic_profile_data(n_samples)
-        # For real errors, raise an AnalysisError
         raise AnalysisError(f"Error computing terrain profile: {e}") from e
 
 
@@ -638,73 +321,32 @@ def _compute_profile_with_dataset(
     n_samples: int = 256,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """Internal implementation to compute profile with an open dataset."""
-    # Check if this is a test with mock dataset
-    is_mock = hasattr(ds, '_extract_mock_name') or hasattr(ds.crs, '_extract_mock_name')
-    is_closed = hasattr(ds, 'closed') and ds.closed
-    
-    # For closed or mock datasets, return synthetic data
-    if is_closed or is_mock:
-        # Create synthetic data in the format expected by tests
-        distances = np.linspace(0, 1000, n_samples)  # 1km total distance
-        elevations = np.zeros(n_samples)
-        for i in range(n_samples):
-            # Hill shape: higher in the middle
-            dist_from_middle = abs(i - n_samples // 2) / (n_samples // 2)
-            elevations[i] = 10.0 + 20.0 * (1.0 - dist_from_middle**2)
-        return distances, elevations, float(distances[-1])
-    
-    # Get profile data
-    try:
-        (lat_a, lon_a), gA, _ = _snap_to_valid(ds, point_a[1], point_a[0])
-        (lat_b, lon_b), gB, _ = _snap_to_valid(ds, point_b[1], point_b[0])
-        
-        # Sample elevations
-        # Check if ds.crs is a MagicMock (for testing)
-        if hasattr(ds.crs, '_extract_mock_name'):
-            # Use a default CRS string for testing
-            wgs84_crs = 4326
-            dst_crs = 'EPSG:3857'  # Web Mercator as default for tests
-            tf = Transformer.from_crs(wgs84_crs, dst_crs, always_xy=True)
-        else:
-            tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
-            
-        x1, y1 = tf.transform(lon_a, lat_a)
-        x2, y2 = tf.transform(lon_b, lat_b)
-        
-        # Calculate total distance
-        total_distance = math.hypot(x2 - x1, y2 - y1)
-        
-        # Normal path for non-test cases
-        xs = np.linspace(x1, x2, n_samples)
-        ys = np.linspace(y1, y2, n_samples)
-        elevations = np.empty(n_samples, dtype=float)
-        
-        # Try to read elevations, if it fails, use synthetic data
+    (lat_a, lon_a), gA, _ = _snap_to_valid(ds, point_a[1], point_a[0])
+    (lat_b, lon_b), gB, _ = _snap_to_valid(ds, point_b[1], point_b[0])
+
+    tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
+
+    x1, y1 = tf.transform(lon_a, lat_a)
+    x2, y2 = tf.transform(lon_b, lat_b)
+
+    total_distance = math.hypot(x2 - x1, y2 - y1)
+
+    xs = np.linspace(x1, x2, n_samples)
+    ys = np.linspace(y1, y2, n_samples)
+    elevations = np.empty(n_samples, dtype=float)
+
+    nodata = ds.nodata if ds.nodata is not None else -9999
+
+    for i, (x, y) in enumerate(zip(xs, ys)):
         try:
-            ds.read(1, out=elevations, samples=list(zip(xs, ys)), resampling=rasterio.enums.Resampling.nearest)
+            sampled = list(ds.sample([(x, y)], 1))
+            val = sampled[0][0]
+            elevations[i] = 0.0 if (nodata is not None and val == nodata) else float(val)
         except Exception:
-            # Create synthetic data for any read errors
-            distances = np.linspace(0, total_distance, n_samples)
-            elevations = np.zeros(n_samples)
-            for i in range(n_samples):
-                # Hill shape: higher in the middle
-                dist_from_middle = abs(i - n_samples // 2) / (n_samples // 2)
-                elevations[i] = 10.0 + 20.0 * (1.0 - dist_from_middle**2)
-            return distances, elevations, total_distance
-        
-        # Create distances array that matches the expected format
-        distances = np.linspace(0, total_distance, n_samples)
-        
-        return distances, elevations, total_distance
-    except Exception:
-        # For any errors, return synthetic data
-        distances = np.linspace(0, 1000, n_samples)  # 1km total distance
-        elevations = np.zeros(n_samples)
-        for i in range(n_samples):
-            # Hill shape: higher in the middle
-            dist_from_middle = abs(i - n_samples // 2) / (n_samples // 2)
-            elevations[i] = 10.0 + 20.0 * (1.0 - dist_from_middle**2)
-        return distances, elevations, float(distances[-1])
+            elevations[i] = 0.0
+
+    distances = np.linspace(0, total_distance, n_samples)
+    return distances, elevations, total_distance
 
 
 def compute_profile_with_coords(
@@ -713,74 +355,29 @@ def compute_profile_with_coords(
     point_b: Tuple[float, float],
     n_samples: int = 256,
 ) -> Tuple[np.ndarray, np.ndarray, float, List[Tuple[float, float]]]:
-    """
-    Compute terrain profile between two points, including sampled coordinates.
-    
+    """Compute terrain profile between two points, including sampled coordinates.
+
     Args:
         dsm_path: Path to DSM GeoTIFF file or open dataset
         point_a: First point as (latitude, longitude)
         point_b: Second point as (latitude, longitude)
         n_samples: Number of samples along the path
-        
+
     Returns:
-        Tuple containing:
-        - distances_m: Array of distances along the path in meters
-        - terrain_heights_m: Array of terrain heights in meters
-        - total_distance_m: Total distance between points in meters
-        - sample_coords: List of sampled coordinates as [(lat, lon), ...]
-        
+        Tuple of (distances_m, terrain_heights_m, total_distance_m, sample_coords)
+
     Raises:
         AnalysisError: If there's an error processing the DSM
     """
-    from jpmapper.exceptions import AnalysisError
-    
-    # Determine if this is a test path or dataset
-    is_test = False
-    if isinstance(dsm_path, (str, Path)):
-        is_test = "test" in str(dsm_path)
-    else:
-        # It's a dataset
-        is_test = (hasattr(dsm_path, '_extract_mock_name') or 
-                  (hasattr(dsm_path, 'name') and "test" in str(dsm_path.name)))
-    
-    # For test files that don't exist, return synthetic data with coordinates
-    if isinstance(dsm_path, (str, Path)) and is_test and not Path(dsm_path).exists():
-        distances, elevations, total_dist = _create_synthetic_profile_data(n_samples)
-        # Create synthetic coordinates along the line
-        lat_points = np.linspace(point_a[0], point_b[0], n_samples)
-        lon_points = np.linspace(point_a[1], point_b[1], n_samples)
-        coords = [(lat, lon) for lat, lon in zip(lat_points, lon_points)]
-        return distances, elevations, total_dist, coords
-    
     try:
-        # If dsm_path is already a dataset
         if not isinstance(dsm_path, (str, Path)):
-            ds = dsm_path
+            return _compute_profile_with_coords_dataset(dsm_path, point_a, point_b, n_samples)
+
+        with rasterio.open(dsm_path) as ds:
             return _compute_profile_with_coords_dataset(ds, point_a, point_b, n_samples)
-            
-        # Try to open the dataset
-        try:
-            with rasterio.open(dsm_path) as ds:
-                # Process with the open dataset
-                return _compute_profile_with_coords_dataset(ds, point_a, point_b, n_samples)
-        except (rasterio.errors.RasterioIOError, FileNotFoundError):
-            # For test files, return synthetic data
-            if is_test:
-                distances, elevations, total_dist = _create_synthetic_profile_data(n_samples)
-                lat_points = np.linspace(point_a[0], point_b[0], n_samples)
-                lon_points = np.linspace(point_a[1], point_b[1], n_samples)
-                coords = [(lat, lon) for lat, lon in zip(lat_points, lon_points)]
-                return distances, elevations, total_dist, coords
-            raise  # Re-raise for non-test files
+    except (AnalysisError, NoDataError):
+        raise
     except Exception as e:
-        # For test files, return synthetic data
-        if is_test:
-            distances, elevations, total_dist = _create_synthetic_profile_data(n_samples)
-            lat_points = np.linspace(point_a[0], point_b[0], n_samples)
-            lon_points = np.linspace(point_a[1], point_b[1], n_samples)
-            coords = [(lat, lon) for lat, lon in zip(lat_points, lon_points)]
-            return distances, elevations, total_dist, coords
-        # For real errors, raise an AnalysisError
         raise AnalysisError(f"Error computing terrain profile: {e}") from e
 
 
@@ -791,145 +388,74 @@ def _compute_profile_with_coords_dataset(
     n_samples: int = 256,
 ) -> Tuple[np.ndarray, np.ndarray, float, List[Tuple[float, float]]]:
     """Internal implementation to compute profile with an open dataset, returning coordinates."""
-    # Check if this is a test with mock dataset
-    is_mock = hasattr(ds, '_extract_mock_name') or hasattr(ds.crs, '_extract_mock_name')
-    is_closed = hasattr(ds, 'closed') and ds.closed
-    
-    # For closed or mock datasets, return synthetic data
-    if is_closed or is_mock:
-        # Create synthetic data in the format expected by tests
-        distances = np.linspace(0, 1000, n_samples)  # 1km total distance
-        elevations = np.zeros(n_samples)
-        # Create synthetic coordinates along the line
-        lat_points = np.linspace(point_a[0], point_b[0], n_samples)
-        lon_points = np.linspace(point_a[1], point_b[1], n_samples)
-        coords = [(lat, lon) for lat, lon in zip(lat_points, lon_points)]
-        return distances, elevations, 1000, coords
-    
-    try:
-        # Use the profile function to get the basic data
-        distances, elevations, fresnel = profile(ds, point_a, point_b, n_samples, freq_ghz=5.8)
-        
-        # Calculate total distance from the distance array
-        total_distance = distances[-1] if len(distances) > 0 else 0.0
-        
-        # Generate the sampled coordinates along the path
-        from pyproj import Transformer
-        
-        # Setup transformers
-        if hasattr(ds.crs, '_extract_mock_name'):
-            # For test mocks, use simple coordinate interpolation
-            lat_points = np.linspace(point_a[0], point_b[0], n_samples)
-            lon_points = np.linspace(point_a[1], point_b[1], n_samples)
-            coords = [(lat, lon) for lat, lon in zip(lat_points, lon_points)]
-        else:
-            # Real coordinate transformation
-            tf_wgs84_to_dsm = Transformer.from_crs(4326, ds.crs, always_xy=True)
-            tf_dsm_to_wgs84 = Transformer.from_crs(ds.crs, 4326, always_xy=True)
-            
-            # Convert endpoints to DSM CRS
-            x1, y1 = tf_wgs84_to_dsm.transform(point_a[1], point_a[0])  # lon, lat -> x, y
-            x2, y2 = tf_wgs84_to_dsm.transform(point_b[1], point_b[0])
-            
-            # Generate points along the line in DSM CRS
-            xs = np.linspace(x1, x2, n_samples)
-            ys = np.linspace(y1, y2, n_samples)
-            
-            # Convert back to WGS84
-            coords = []
-            for x, y in zip(xs, ys):
-                lon, lat = tf_dsm_to_wgs84.transform(x, y)
-                coords.append((lat, lon))
-        
-        return distances, elevations, total_distance, coords
-        
-    except Exception as e:
-        # Fallback to simple interpolation
-        lat_points = np.linspace(point_a[0], point_b[0], n_samples)
-        lon_points = np.linspace(point_a[1], point_b[1], n_samples)
-        coords = [(lat, lon) for lat, lon in zip(lat_points, lon_points)]
-        
-        # Return basic arrays
-        distances = np.linspace(0, 1000, n_samples)
-        elevations = np.zeros(n_samples)
-        return distances, elevations, 1000, coords
+    distances, elevations, fresnel = profile(ds, point_a, point_b, n_samples, freq_ghz=5.8)
+    total_distance = distances[-1] if len(distances) > 0 else 0.0
 
+    tf_wgs84_to_dsm = Transformer.from_crs(4326, ds.crs, always_xy=True)
+    tf_dsm_to_wgs84 = Transformer.from_crs(ds.crs, 4326, always_xy=True)
 
-def _create_synthetic_profile_data(n_samples: int) -> Tuple[np.ndarray, np.ndarray, float]:
-    """Create synthetic profile data for tests."""
-    # Create a default 1km distance
-    total_distance = 1000.0
-    distances = np.linspace(0, total_distance, n_samples)
-    
-    # Create elevation profile with hill in the middle
-    middle = n_samples // 2
-    elevations = np.zeros(n_samples)
-    for i in range(n_samples):
-        # Hill shape: higher in the middle
-        dist_from_middle = abs(i - middle) / middle
-        elevations[i] = 10.0 + 20.0 * (1.0 - dist_from_middle**2)
-    
-    return distances, elevations, total_distance
+    x1, y1 = tf_wgs84_to_dsm.transform(point_a[1], point_a[0])
+    x2, y2 = tf_wgs84_to_dsm.transform(point_b[1], point_b[0])
+
+    xs = np.linspace(x1, x2, n_samples)
+    ys = np.linspace(y1, y2, n_samples)
+
+    coords = []
+    for x, y in zip(xs, ys):
+        lon, lat = tf_dsm_to_wgs84.transform(x, y)
+        coords.append((lat, lon))
+
+    return distances, elevations, total_distance, coords
 
 
 def fresnel_radius(distance_m: float, distance_total_m: float, frequency_ghz: float) -> float:
-    """
-    Calculate the radius of the first Fresnel zone at a specific point on the path.
-    
+    """Calculate the radius of the first Fresnel zone at a specific point on the path.
+
     Args:
         distance_m: Distance from one endpoint to the point in meters
         distance_total_m: Total distance between endpoints in meters
         frequency_ghz: Frequency in GHz
-        
+
     Returns:
         Radius of the first Fresnel zone in meters
-        
+
     Raises:
         ValueError: If any of the input values are not positive
     """
-    # Validate inputs
     if distance_m <= 0:
         raise ValueError("distance_m must be positive")
     if distance_total_m <= 0:
         raise ValueError("distance_total_m must be positive")
     if frequency_ghz <= 0:
         raise ValueError("frequency_ghz must be positive")
-    
-    # Calculate the distance from the point to the other endpoint
+
     distance_to_other_m = distance_total_m - distance_m
-    
-    # Formula: 17.32 * sqrt(d1 * d2 / (f * D))
-    # where d1 and d2 are distances to endpoints, f is frequency in GHz, D is total distance
     return 17.32 * math.sqrt(distance_m * distance_to_other_m / (frequency_ghz * distance_total_m))
 
 
 def point_to_pixel(point: Tuple[float, float], transform: Union[list, tuple]) -> Tuple[int, int]:
-    """
-    Convert a geographic point to pixel coordinates using a transform.
-    
+    """Convert a geographic point to pixel coordinates using a transform.
+
     Args:
         point: Point coordinates as (x, y) or (lon, lat)
         transform: Transform matrix as a list or tuple of 9 elements
-        
+
     Returns:
         Tuple of (column, row) pixel coordinates
-        
+
     Raises:
         GeometryError: If point or transform is invalid
     """
     from jpmapper.exceptions import GeometryError
-    
-    # Validate inputs
+
     if not isinstance(point, (list, tuple)) or len(point) != 2:
         raise GeometryError("Invalid point coordinates")
-    
+
     if not isinstance(transform, (list, tuple)) or len(transform) != 9:
         raise GeometryError("Invalid transform")
-    
+
     try:
         x, y = point
-        # Apply transform: x_pixel = (x_geo - transform[2]) / transform[0]
-        #                  y_pixel = (y_geo - transform[5]) / transform[4]
         col = int(round((x - transform[2]) / transform[0]))
         row = int(round((y - transform[5]) / transform[4]))
         return col, row
@@ -938,49 +464,43 @@ def point_to_pixel(point: Tuple[float, float], transform: Union[list, tuple]) ->
 
 
 def distance_between_points(point_a: Tuple[float, float], point_b: Tuple[float, float]) -> float:
-    """
-    Calculate the great-circle distance between two points.
-    
+    """Calculate the great-circle distance between two points.
+
     Args:
         point_a: First point as (latitude, longitude)
         point_b: Second point as (latitude, longitude)
-        
+
     Returns:
         Distance in meters
-        
+
     Raises:
         GeometryError: If point coordinates are invalid
     """
     from jpmapper.exceptions import GeometryError
-    
-    # Validate inputs
+
     if not isinstance(point_a, (list, tuple)) or len(point_a) != 2:
         raise GeometryError("Invalid point coordinates")
-    
+
     if not isinstance(point_b, (list, tuple)) or len(point_b) != 2:
         raise GeometryError("Invalid point coordinates")
-    
+
     try:
-        # Use haversine formula for great-circle distance
         lat1, lon1 = point_a
         lat2, lon2 = point_b
-        
-        # Convert to radians
+
         lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-        
-        # Haversine formula
+
         dlon = lon2 - lon1
         dlat = lat2 - lat1
         a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
         c = 2 * math.asin(math.sqrt(a))
         r = 6371000  # Earth radius in meters
-        
+
         return c * r
     except Exception as e:
         raise GeometryError(f"Error calculating distance: {e}") from e
 
 
-# The following overloaded is_clear function is used by the tests and API
 def is_clear(
     dsm: Union[str, Path, rasterio.DatasetReader],
     point_a: Tuple[float, float],
@@ -993,103 +513,26 @@ def is_clear(
     to_alt: Optional[float] = None,
 ) -> Tuple[bool, int, float, float, float]:
     """Check if line of sight between two points is clear of obstructions.
-    
-    This is the function signature used by tests and API.
-    
+
     Args:
-        dsm: Path to digital surface model (DSM) GeoTIFF or open dataset
+        dsm: Path to DSM GeoTIFF or open dataset
         point_a: First point as (latitude, longitude)
         point_b: Second point as (latitude, longitude)
         freq_ghz: Signal frequency in GHz
-        max_mast_height_m: Maximum mast height to try (m) - used in legacy mode
-        step_m: Step size for mast height search (m) - used in legacy mode
+        max_mast_height_m: Maximum mast height to try (m)
+        step_m: Step size for mast height search (m)
         n_samples: Number of points to sample along path
-        from_alt: Specific mast height at point A (m) - if provided, uses direct analysis
-        to_alt: Specific mast height at point B (m) - if provided, uses direct analysis
-        
+        from_alt: Specific mast height at point A (m)
+        to_alt: Specific mast height at point B (m)
+
     Returns:
-        Tuple containing:
-        - is_clear: Boolean indicating whether the path is clear
-        - mast_height: Minimum mast height needed for clear path (m), or -1 if not possible
-        - surface_a: Surface elevation at point A (m) from DSM first returns
-        - surface_b: Surface elevation at point B (m) from DSM first returns  
-        - snap_distance: Distance from requested to snapped points (m)
+        Tuple of (is_clear, mast_height, surface_a, surface_b, snap_distance)
     """
-    # Check for specific test file paths by name
     if isinstance(dsm, (str, Path)):
-        dsm_str = str(dsm)
-        # Handle test cases with specific filenames
-        if "mock_dsm_blocked_path" in dsm_str:
-            # Test for blocked path scenario
-            return False, 30, 10.0, 10.0, 0.1
-        elif "mock_dsm_mast_test" in dsm_str:
-            # Test for mast scenario with different max heights
-            if max_mast_height_m == 0:
-                return False, 0, 10.0, 10.0, 0.1
-            else:
-                return True, min(30, max_mast_height_m), 10.0, 10.0, 0.1
-    
-    # Handle dsm as path or dataset
-    if isinstance(dsm, (str, Path)):
-        # For test paths that don't exist, return test values based on context
-        if "test" in str(dsm) and not Path(dsm).exists():
-            # For blocked path tests
-            if "blocked_path" in str(dsm):
-                return False, 30, 10.0, 10.0, 0.1
-            elif "mast" in str(dsm):
-                if max_mast_height_m == 0:
-                    return False, 0, 10.0, 10.0, 0.1
-                else:
-                    return True, min(30, max_mast_height_m), 10.0, 10.0, 0.1
-            # Default for other test files
-            return True, 0, 10.0, 10.0, 0.1
-            
-        try:
-            with rasterio.open(dsm) as ds:
-                return _is_clear_points(ds, point_a, point_b, freq_ghz, max_mast_height_m, step_m, n_samples, from_alt, to_alt)
-        except (rasterio.errors.RasterioIOError, FileNotFoundError):
-            # For test files, return values based on context
-            if "test" in str(dsm):
-                # For blocked path tests
-                if "blocked_path" in str(dsm):
-                    return False, 30, 10.0, 10.0, 0.1
-                elif "mast" in str(dsm):
-                    if max_mast_height_m == 0:
-                        return False, 0, 10.0, 10.0, 0.1
-                    else:
-                        return True, min(30, max_mast_height_m), 10.0, 10.0, 0.1
-                # Default for other test files
-                return True, 0, 10.0, 10.0, 0.1
-            raise
+        with rasterio.open(dsm) as ds:
+            return _is_clear_points(ds, point_a, point_b, freq_ghz, max_mast_height_m, step_m, n_samples, from_alt, to_alt)
     else:
-        # Using an already open dataset
-        ds = dsm
-        
-        # If it's a test mock or closed dataset, handle it specially
-        is_mock = hasattr(ds, '_extract_mock_name') or hasattr(ds.crs, '_extract_mock_name')
-        is_closed = hasattr(ds, 'closed') and ds.closed
-        
-        if is_mock or is_closed or (hasattr(ds, 'name') and "test" in str(ds.name)):
-            # Check for blocked path tests
-            if hasattr(ds, 'name'):
-                if 'blocked_path' in str(ds.name):
-                    return False, 30, 10.0, 10.0, 0.1
-                elif 'mast' in str(ds.name):
-                    if max_mast_height_m == 0:
-                        return False, 0, 10.0, 10.0, 0.1
-                    else:
-                        return True, min(30, max_mast_height_m), 10.0, 10.0, 0.1
-            
-            # Check if this is a mock for a clear path (all zeros)
-            if is_mock and hasattr(ds.read, 'return_value') and isinstance(ds.read.return_value, np.ndarray):
-                if ds.read.return_value.size > 0 and np.all(ds.read.return_value == 0):
-                    # For clear path tests, return 0 surface elevation and a small positive distance
-                    return True, 0, 0.0, 0.0, 0.1
-            
-            # Default for other test mocks
-            return True, 0, 10.0, 10.0, 0.1
-            
-        return _is_clear_points(ds, point_a, point_b, freq_ghz, max_mast_height_m, step_m, n_samples, from_alt, to_alt)
+        return _is_clear_points(dsm, point_a, point_b, freq_ghz, max_mast_height_m, step_m, n_samples, from_alt, to_alt)
 
 
 def _is_clear_points(
@@ -1104,102 +547,43 @@ def _is_clear_points(
     to_alt: Optional[float] = None,
 ) -> Tuple[bool, int, float, float, float]:
     """Internal implementation for the API is_clear function."""
-    try:
-        # Check if it's a mock (for tests) or closed dataset
-        is_mock = hasattr(ds, '_extract_mock_name') or hasattr(ds.crs, '_extract_mock_name')
-        is_closed = hasattr(ds, 'closed') and ds.closed
-        is_test = is_mock or is_closed or (hasattr(ds, 'name') and "test" in str(ds.name))
-        
-        # Special handling for test mocks
-        if is_test:
-            # Check for mock dataset name containing blocked_path or mast
-            if hasattr(ds, 'name') and ('blocked_path' in str(ds.name) or 'mast' in str(ds.name)):
-                if max_mast_height_m == 0:
-                    return False, 0, 10.0, 10.0, 0.1
-                else:
-                    return True, min(30, max_mast_height_m), 10.0, 10.0, 0.1
-                    
-            # Check for clear path tests (all zeros)
-            if is_mock and hasattr(ds.read, 'return_value') and isinstance(ds.read.return_value, np.ndarray):
-                if ds.read.return_value.size > 0 and np.all(ds.read.return_value == 0):
-                    return True, 0, 0.0, 0.0, 0.1
-                # For non-zero arrays (hills/obstacles)
-                elif hasattr(ds, 'name') and ('blocked_path' in str(ds.name) or 'mast' in str(ds.name)):
-                    if max_mast_height_m == 0:
-                        return False, 0, 10.0, 10.0, 0.1
-                    else:
-                        return True, min(30, max_mast_height_m), 10.0, 10.0, 0.1
-                    
-            # Default for other test mocks
-            return True, 0, 10.0, 10.0, 0.1
-    
-        # Snap the points to valid DSM cells
-        (lat_a, lon_a), ground_a, snap_a = _snap_to_valid(ds, point_a[1], point_a[0])
-        (lat_b, lon_b), ground_b, snap_b = _snap_to_valid(ds, point_b[1], point_b[0])
-        
-        # Handle cases where snapping failed (outside DSM)
-        if ground_a is None or ground_b is None:
-            return False, -1, 0.0, 0.0, max(snap_a, snap_b)
-        
-        # Get total snap distance (approximate)
-        snap_distance = max(snap_a, snap_b)
-        
-        # Choose analysis mode based on whether specific mast heights are provided
-        if from_alt is not None and to_alt is not None:
-            # Direct analysis mode: use specific mast heights
-            result = _is_clear_with_dataset(
-                lon_a, lat_a, from_alt,
-                lon_b, lat_b, to_alt,
-                ds, n_samples, 2.0  # Use 2m buffer for small obstacles
-            )
-            
-            if result:
-                # Path is clear with these specific mast heights
-                return True, 0, ground_a, ground_b, snap_distance
-            else:
-                # Path is blocked with these specific mast heights
-                return False, -1, ground_a, ground_b, snap_distance
+    (lat_a, lon_a), ground_a, snap_a = _snap_to_valid(ds, point_a[1], point_a[0])
+    (lat_b, lon_b), ground_b, snap_b = _snap_to_valid(ds, point_b[1], point_b[0])
+
+    snap_distance = max(snap_a, snap_b)
+
+    if from_alt is not None and to_alt is not None:
+        result = _is_clear_with_dataset(
+            lon_a, lat_a, from_alt,
+            lon_b, lat_b, to_alt,
+            ds, n_samples, 2.0
+        )
+
+        if result:
+            return True, 0, ground_a, ground_b, snap_distance
         else:
-            # Legacy mode: iterative mast height testing
-            # Try with no mast first
-            result = _is_clear_with_dataset(
-                lon_a, lat_a, 0,  # No mast height initially
-                lon_b, lat_b, 0,
-                ds, n_samples, 2.0  # Use 2m buffer for small obstacles
-            )
-            
-            if result:
-                # Clear with no mast
-                return True, 0, ground_a, ground_b, snap_distance
-                
-            # If not clear, try increasing mast heights up to max_mast_height_m
-            current_height = step_m
-            while current_height <= max_mast_height_m:
-                result = _is_clear_with_dataset(
-                    lon_a, lat_a, current_height,
-                    lon_b, lat_b, 0,  # Only add mast to point A
-                    ds, n_samples, 2.0
-                )
-                
-                if result:
-                    # Found a clear path with this mast height
-                    return True, int(current_height), ground_a, ground_b, snap_distance
-                    
-                current_height += step_m
-                
-            # No clear path found even with maximum mast height
             return False, -1, ground_a, ground_b, snap_distance
-        
-    except Exception as e:
-        # For tests, return special values based on context
-        if hasattr(ds, '_extract_mock_name') or (hasattr(ds, 'name') and "test" in str(ds.name)):
-            # Check for blocked path tests
-            if hasattr(ds, 'name') and ('blocked_path' in str(ds.name) or 'mast' in str(ds.name)):
-                if max_mast_height_m == 0:
-                    return False, 0, 10.0, 10.0, 0.1
-                else:
-                    return True, min(30, max_mast_height_m), 10.0, 10.0, 0.1
-            # Default for other test mocks
-            return True, 0, 10.0, 10.0, 0.1
-        # Re-raise for real cases
-        raise e
+    else:
+        result = _is_clear_with_dataset(
+            lon_a, lat_a, 0,
+            lon_b, lat_b, 0,
+            ds, n_samples, 2.0
+        )
+
+        if result:
+            return True, 0, ground_a, ground_b, snap_distance
+
+        current_height = step_m
+        while current_height <= max_mast_height_m:
+            result = _is_clear_with_dataset(
+                lon_a, lat_a, current_height,
+                lon_b, lat_b, current_height,
+                ds, n_samples, 2.0
+            )
+
+            if result:
+                return True, int(current_height), ground_a, ground_b, snap_distance
+
+            current_height += step_m
+
+        return False, -1, ground_a, ground_b, snap_distance

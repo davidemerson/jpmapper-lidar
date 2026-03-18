@@ -99,14 +99,6 @@ def analyze_los(
     if n_samples < 2:
         raise ValueError(f"Number of samples must be at least 2: {n_samples}")
     
-    # Check if this is a test case
-    is_test = False
-    if isinstance(dsm_path, Path):
-        is_test = "test" in str(dsm_path)
-    else:
-        is_test = (hasattr(dsm_path, '_extract_mock_name') or 
-                  (hasattr(dsm_path, 'name') and "test" in str(dsm_path.name)))
-    
     # Handle Path vs. opened dataset
     needs_close = False
     ds = None
@@ -130,21 +122,6 @@ def analyze_los(
                     n_samples=n_samples
                 )
                 
-                # For test cases in test_end_to_end.py, return the expected field names
-                if is_test:
-                    return {
-                        "clear": is_clear,
-                        "mast_height_m": mast_height,
-                        "surface_height_a_m": gnd_a,
-                        "surface_height_b_m": gnd_b,
-                        "distance_m": 1000.0,  # Mock distance for tests
-                        "clearance_min_m": 0.0,  # Default clearance value
-                        "surface_a_m": gnd_a,      # Add API field names too
-                        "surface_b_m": gnd_b,
-                        "distance": distance
-                    }
-                
-                # Regular return value structure for API usage
                 return {
                     "clear": is_clear,
                     "mast_height_m": mast_height,

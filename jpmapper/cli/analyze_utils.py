@@ -131,17 +131,9 @@ def _get_profile_details(dsm_path: Path, point_a: Tuple[float, float], point_b: 
         import math
         from pyproj import Transformer
         
-        # For test scenarios, return mock data
-        if "test" in str(dsm_path) or not dsm_path.exists():
-            return {
-                "total_distance_m": 1000.0,
-                "samples_analyzed": n_samples,
-                "terrain_profile_summary": "Test profile - no obstructions detected",
-                "max_terrain_height_m": 15.0,
-                "min_terrain_height_m": 5.0,
-                "obstructions": []
-            }
-        
+        if not dsm_path.exists():
+            raise FileNotFoundError(f"DSM file does not exist: {dsm_path}")
+
         with rasterio.open(dsm_path) as ds:
             # Get the terrain profile
             distances, terrain_heights, fresnel_radii = profile(ds, point_a, point_b, n_samples, freq_ghz)

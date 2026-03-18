@@ -8,10 +8,8 @@ import csv
 import json
 import logging
 import statistics
-import sys
 from pathlib import Path
 from typing import Iterator, List, Tuple, Dict, Any, Optional, Union
-from unittest.mock import patch
 
 import numpy as np
 import typer
@@ -134,32 +132,17 @@ def analyze_csv(
     Optional columns: point_a_mast, point_b_mast (mast heights in meters)
     """
     
-    # Mock the file existence for tests
-    if 'pytest' in sys.modules and not Path(points_csv).exists():
-        with patch('pathlib.Path.exists', return_value=True):
-            results = analyze_csv_file(
-                points_csv,
-                las_dir=las_dir,
-                cache=cache,
-                epsg=epsg, 
-                resolution=resolution,
-                workers=workers,
-                output_format="json",
-                output_path=json_out,
-                map_output=map_png
-            )
-    else:
-        results = analyze_csv_file(
-            points_csv,
-            las_dir=las_dir,
-            cache=cache,
-            epsg=epsg, 
-            resolution=resolution,
-            workers=workers,
-            output_format="json",
-            output_path=json_out,
-            map_output=map_png
-        )
+    results = analyze_csv_file(
+        points_csv,
+        las_dir=las_dir,
+        cache=cache,
+        epsg=epsg,
+        resolution=resolution,
+        workers=workers,
+        output_format="json",
+        output_path=json_out,
+        map_output=map_png
+    )
     
     # Generate summary table if not just returning results
     # ... (visualization code would go here)

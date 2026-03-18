@@ -7,6 +7,7 @@ jpmapper.egg-info/
 
 # Python/Environment related
 venv/
+.venv/
 env/
 .pytest_cache/
 .coverage
@@ -25,7 +26,7 @@ build/
 # Project specific
 results/
 *.json
-*_profile.png
+*.png
 
 # Conda environment files
 environment.yml

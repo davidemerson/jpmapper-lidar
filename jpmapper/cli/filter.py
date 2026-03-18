@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import typer
 
@@ -73,7 +71,7 @@ def filter_bbox(
             if len(bbox_values) != 4:
                 typer.echo(f"Bounding box must have 4 values, got {len(bbox_values)}")
                 raise typer.Exit(code=1)
-            
+
             bbox_tuple = tuple(map(float, bbox_values))
         except ValueError as e:
             typer.echo(f"Error parsing bounding box: {e}")
@@ -81,13 +79,14 @@ def filter_bbox(
     else:
         # Use default from config if not provided
         cfg = _config.load()
-        bbox_tuple = cfg.bbox    # If src is a directory, get all LAS/LAZ files    # Set up tiles list
-    if not 'pytest' in sys.modules and src.exists() and src.is_dir():
+        bbox_tuple = cfg.bbox
+
+    if src.exists() and src.is_dir():
         tiles = list(src.glob("*.la?[sz]"))
     else:
-        # Single file mode or test mode
+        # Single file mode
         tiles = [src]
-    
+
     # Always use the API function for consistency
     selected = filter_by_bbox(tiles, bbox=bbox_tuple, dst_dir=dst)
 
@@ -95,7 +94,7 @@ def filter_bbox(
         f"Selected {len(selected)} of {len(tiles)} tiles inside bbox {bbox_tuple}",
         fg=typer.colors.GREEN,
     )
-    
+
     return selected
 
 
@@ -143,25 +142,24 @@ def filter_shapefile(
     ),
 ):
     """Filter LAS/LAZ files using a shapefile boundary."""
-    
+
     try:
         from jpmapper.api.shapefile_filter import filter_by_shapefile
     except ImportError:
         typer.echo("Error: Shapefile support requires geopandas and fiona")
         typer.echo("Install with: conda install -c conda-forge geopandas fiona")
         raise typer.Exit(code=1)
-    
-    # Set up files list
-    if not 'pytest' in sys.modules and src.exists() and src.is_dir():
+
+    if src.exists() and src.is_dir():
         tiles = list(src.glob("*.la?[sz]"))
     else:
-        # Single file mode or test mode
+        # Single file mode
         tiles = [src]
-    
+
     try:
         selected = filter_by_shapefile(
-            tiles, 
-            shapefile, 
+            tiles,
+            shapefile,
             dst_dir=dst,
             buffer_meters=buffer,
             validate_crs=validate_crs
@@ -171,9 +169,9 @@ def filter_shapefile(
             f"Selected {len(selected)} of {len(tiles)} tiles inside shapefile boundary",
             fg=typer.colors.GREEN,
         )
-        
+
         return selected
-        
+
     except Exception as e:
         typer.echo(f"Error filtering by shapefile: {e}")
         raise typer.Exit(code=1)
