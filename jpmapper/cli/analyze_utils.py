@@ -158,23 +158,19 @@ def _get_profile_details(dsm_path: Path, point_a: Tuple[float, float], point_b: 
             from pyproj import Transformer
             tf_to_wgs84 = Transformer.from_crs(ds.crs, 4326, always_xy=True)
             tf_from_wgs84 = Transformer.from_crs(4326, ds.crs, always_xy=True)
-            
+
+            # Pre-compute projected endpoints (outside the loop)
+            x1, y1 = tf_from_wgs84.transform(point_a[1], point_a[0])
+            x2, y2 = tf_from_wgs84.transform(point_b[1], point_b[0])
+
             for i, (dist, terrain_h, fresnel_r, los_h) in enumerate(zip(distances, terrain_heights, fresnel_radii, los_heights)):
-                # Calculate how much terrain intrudes into Fresnel zone
-                los_clearance = terrain_h - los_h  # Height above direct line-of-sight
-                fresnel_clearance = terrain_h - (los_h + fresnel_r)  # Height above full Fresnel zone
-                
-                # Calculate coordinates of this sample point
+                los_clearance = terrain_h - los_h
+                fresnel_clearance = terrain_h - (los_h + fresnel_r)
+
                 progress_ratio = dist / total_distance if total_distance > 0 else 0
-                
-                # Get projected coordinates along the path
-                x1, y1 = tf_from_wgs84.transform(point_a[1], point_a[0])  # lon, lat to x, y
-                x2, y2 = tf_from_wgs84.transform(point_b[1], point_b[0])
-                
+
                 sample_x = x1 + (x2 - x1) * progress_ratio
                 sample_y = y1 + (y2 - y1) * progress_ratio
-                
-                # Convert back to lat/lon for reporting
                 sample_lon, sample_lat = tf_to_wgs84.transform(sample_x, sample_y)
                 
                 # Calculate antenna heights at endpoints with mast heights
@@ -289,8 +285,8 @@ def _get_profile_details(dsm_path: Path, point_a: Tuple[float, float], point_b: 
                     "point_a_antenna_height_m": float(terrain_heights[0]) + mast_a_height if len(terrain_heights) > 0 else mast_a_height,
                     "point_b_antenna_height_m": float(terrain_heights[-1]) + mast_b_height if len(terrain_heights) > 0 else mast_b_height
                 },
-                "sample_points": sample_points[:50] if len(sample_points) > 50 else sample_points,  # Limit for readability but include more detail
-                "obstructions": obstructions[:15],  # Limit to first 15 obstructions for readability
+                "sample_points": sample_points,
+                "obstructions": obstructions,
                 "total_path_loss_db": total_path_loss_db,
                 "free_space_path_loss_db": free_space_path_loss_db,
                 "obstruction_summary": {
@@ -521,10 +517,19 @@ def analyze_csv_file(
         else:
             raise ValueError("Either cache or las_dir must be provided")
             
-        # Read CSV file into memory
+        # Read CSV file into memory and validate columns
         rows = []
+        required_cols = {"point_a_lat", "point_a_lon", "point_b_lat", "point_b_lon"}
         with open(csv_path, 'r') as f:
             reader = csv.DictReader(f)
+            if reader.fieldnames is None:
+                raise ValueError(f"CSV file is empty or has no header: {csv_path}")
+            missing = required_cols - set(reader.fieldnames)
+            if missing:
+                raise ValueError(
+                    f"CSV missing required columns: {', '.join(sorted(missing))}. "
+                    f"Found: {', '.join(reader.fieldnames)}"
+                )
             rows = list(reader)
         
         # Get optimal number of workers for analysis

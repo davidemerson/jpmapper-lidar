@@ -13,7 +13,7 @@ from typing import Tuple, Optional, Union, Dict, Any
 import numpy as np
 import rasterio
 
-from jpmapper.analysis.los import is_clear as _is_clear, profile as _profile
+from jpmapper.analysis.los import is_clear as _is_clear, profile as _profile, distance_between_points as _geodetic_distance
 from jpmapper.analysis.plots import save_profile_png as _save_profile_png
 from jpmapper.exceptions import AnalysisError, LOSError, GeometryError
 
@@ -86,6 +86,9 @@ def analyze_los(
     
     if max_mast_height_m is not None and max_mast_height_m < 0:
         raise ValueError(f"Maximum mast height must be non-negative: {max_mast_height_m}")
+
+    if max_mast_height_m is not None and max_mast_height_m > 500:
+        raise ValueError(f"Maximum mast height exceeds 500m limit: {max_mast_height_m}")
     
     if mast_a_height_m < 0:
         raise ValueError(f"Mast A height must be non-negative: {mast_a_height_m}")
@@ -99,70 +102,60 @@ def analyze_los(
     if n_samples < 2:
         raise ValueError(f"Number of samples must be at least 2: {n_samples}")
     
-    # Handle Path vs. opened dataset
-    needs_close = False
-    ds = None
-    
+    # Compute geodetic distance between the input points
+    geodetic_dist_m = _geodetic_distance(point_a, point_b)
+
+    def _run_analysis(ds):
+        if max_mast_height_m is not None:
+            is_clear, mast_height, gnd_a, gnd_b, snap_dist = _is_clear(
+                ds, point_a, point_b,
+                freq_ghz=freq_ghz,
+                max_mast_height_m=max_mast_height_m,
+                step_m=mast_height_step_m,
+                n_samples=n_samples
+            )
+            return {
+                "clear": is_clear,
+                "mast_height_m": mast_height,
+                "surface_height_a_m": gnd_a,
+                "surface_height_b_m": gnd_b,
+                "distance_m": geodetic_dist_m,
+                "snap_distance_m": snap_dist,
+                "clearance_min_m": 0.0,
+            }
+        else:
+            is_clear, _, gnd_a, gnd_b, snap_dist = _is_clear(
+                ds, point_a, point_b,
+                freq_ghz=freq_ghz,
+                from_alt=mast_a_height_m,
+                to_alt=mast_b_height_m,
+                n_samples=n_samples
+            )
+            return {
+                "clear": is_clear,
+                "mast_a_height_m": mast_a_height_m,
+                "mast_b_height_m": mast_b_height_m,
+                "surface_height_a_m": gnd_a,
+                "surface_height_b_m": gnd_b,
+                "distance_m": geodetic_dist_m,
+                "snap_distance_m": snap_dist,
+                "clearance_min_m": 0.0,
+            }
+
     try:
         if isinstance(dsm_path, Path):
-            ds = rasterio.open(dsm_path)
-            needs_close = True
+            with rasterio.open(dsm_path) as ds:
+                return _run_analysis(ds)
         else:
-            ds = dsm_path
-            
-        # Call underlying implementation
-        try:
-            if max_mast_height_m is not None:
-                # Legacy mode: iterative mast height testing
-                is_clear, mast_height, gnd_a, gnd_b, distance = _is_clear(
-                    ds, point_a, point_b, 
-                    freq_ghz=freq_ghz,
-                    max_mast_height_m=max_mast_height_m,
-                    step_m=mast_height_step_m,
-                    n_samples=n_samples
-                )
-                
-                return {
-                    "clear": is_clear,
-                    "mast_height_m": mast_height,
-                    "surface_height_a_m": gnd_a,   # Include test field names  
-                    "surface_height_b_m": gnd_b,
-                    "distance_m": distance,       # Include test field name
-                    "clearance_min_m": 0.0
-                }
-            else:
-                # New mode: use specific mast heights for each point
-                is_clear, _, gnd_a, gnd_b, distance = _is_clear(
-                    ds, point_a, point_b, 
-                    freq_ghz=freq_ghz,
-                    from_alt=mast_a_height_m,
-                    to_alt=mast_b_height_m,
-                    n_samples=n_samples
-                )
-                
-                return {
-                    "clear": is_clear,
-                    "mast_a_height_m": mast_a_height_m,
-                    "mast_b_height_m": mast_b_height_m,
-                    "surface_height_a_m": gnd_a,
-                    "surface_height_b_m": gnd_b,
-                    "distance_m": distance,
-                    "clearance_min_m": 0.0
-                }
-        except ValueError as e:
-            raise GeometryError(f"Geometry error in LOS analysis: {e}") from e
-        except Exception as e:
-            raise LOSError(f"LOS analysis failed: {e}") from e
-            
+            return _run_analysis(dsm_path)
+    except (GeometryError, LOSError, AnalysisError, FileNotFoundError, ValueError):
+        raise
     except rasterio.errors.RasterioError as e:
         raise AnalysisError(f"Error opening or reading DSM: {e}") from e
     except Exception as e:
-        if "No valid DSM cell" in str(e):
+        if "No valid DSM" in str(e):
             raise GeometryError(f"Points outside valid DSM area: {e}") from e
-        raise AnalysisError(f"Unexpected error in LOS analysis: {e}") from e
-    finally:
-        if needs_close and ds is not None:
-            ds.close()
+        raise LOSError(f"LOS analysis failed: {e}") from e
 
 
 def generate_profile(
@@ -220,34 +213,20 @@ def generate_profile(
     if n_samples < 2:
         raise ValueError(f"Number of samples must be at least 2: {n_samples}")
     
-    # Handle Path vs. opened dataset
-    needs_close = False
-    ds = None
-    
     try:
         if isinstance(dsm_path, Path):
-            ds = rasterio.open(dsm_path)
-            needs_close = True
+            with rasterio.open(dsm_path) as ds:
+                return _profile(ds, point_a, point_b, n_samples, freq_ghz)
         else:
-            ds = dsm_path
-        
-        # Call underlying implementation
-        try:
-            return _profile(ds, point_a, point_b, n_samples, freq_ghz)
-        except ValueError as e:
-            raise GeometryError(f"Geometry error in profile generation: {e}") from e
-        except Exception as e:
-            raise AnalysisError(f"Profile generation failed: {e}") from e
-            
+            return _profile(dsm_path, point_a, point_b, n_samples, freq_ghz)
+    except (GeometryError, AnalysisError, FileNotFoundError, ValueError):
+        raise
     except rasterio.errors.RasterioError as e:
         raise AnalysisError(f"Error opening or reading DSM: {e}") from e
     except Exception as e:
-        if "No valid DSM cell" in str(e):
+        if "No valid DSM" in str(e):
             raise GeometryError(f"Points outside valid DSM area: {e}") from e
-        raise AnalysisError(f"Unexpected error in profile generation: {e}") from e
-    finally:
-        if needs_close and ds is not None:
-            ds.close()
+        raise AnalysisError(f"Profile generation failed: {e}") from e
 
 
 def save_profile_plot(

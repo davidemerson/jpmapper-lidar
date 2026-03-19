@@ -83,16 +83,16 @@ class TestWorkflows:
         dsm_path = tmp_path / "dsm.tif"
         dsm_path.touch()
         
-        # Setup mock for rasterio.open
+        # Setup mock for rasterio.open as context manager
         mock_dataset = MagicMock()
         mock_dataset.transform = [0.1, 0, 0, 0, -0.1, 0, 0, 0, 1]
         mock_dataset.crs.to_epsg.return_value = 6539
-        mock_rasterio_open.return_value = mock_dataset
-        
-        # Setup mock for is_clear with the correct return format (matching actual implementation in los.py)
-        # (clear, mast_height, surface_A, surface_B, distance)
+        mock_rasterio_open.return_value.__enter__ = MagicMock(return_value=mock_dataset)
+        mock_rasterio_open.return_value.__exit__ = MagicMock(return_value=False)
+
+        # Setup mock for is_clear
         mock_is_clear.return_value = (True, 0, 10, 15, 100)
-        
+
         # Call the API function
         result = analyze_los(
             dsm_path,
@@ -100,11 +100,11 @@ class TestWorkflows:
             (40.7614, -73.9776),
             freq_ghz=5.8
         )
-        
-        # Verify that is_clear was called with the correct parameters
+
+        # Verify that is_clear was called with the dataset from the context manager
         mock_is_clear.assert_called_once_with(
-            mock_dataset, 
-            (40.7128, -74.0060), 
+            mock_dataset,
+            (40.7128, -74.0060),
             (40.7614, -73.9776),
             freq_ghz=5.8,
             from_alt=0,
@@ -132,18 +132,19 @@ class TestWorkflows:
         # Setup mock files
         dsm_path = tmp_path / "dsm.tif"
         dsm_path.touch()
-          # Setup mock for rasterio.open
+        # Setup mock for rasterio.open as context manager
         mock_dataset = MagicMock()
         mock_dataset.transform = [0.1, 0, 0, 0, -0.1, 0, 0, 0, 1]
         mock_dataset.crs.to_epsg.return_value = 6539
-        mock_rasterio_open.return_value = mock_dataset
-        
+        mock_rasterio_open.return_value.__enter__ = MagicMock(return_value=mock_dataset)
+        mock_rasterio_open.return_value.__exit__ = MagicMock(return_value=False)
+
         # Setup mock for _profile
         distances = np.linspace(0, 100, 10)
         elevations = np.linspace(10, 20, 10) + np.sin(distances / 10) * 5
         fresnel = np.ones_like(distances) * 5.0
         mock_profile.return_value = (distances, elevations, fresnel)
-        
+
         # Call the API function
         result = generate_profile(
             dsm_path,
@@ -152,11 +153,11 @@ class TestWorkflows:
             freq_ghz=5.8,
             n_samples=10
         )
-        
-        # Verify that _profile was called with the correct parameters
+
+        # Verify that _profile was called with the dataset from context manager
         mock_profile.assert_called_once_with(
-            mock_dataset, 
-            (40.7128, -74.0060), 
+            mock_dataset,
+            (40.7128, -74.0060),
             (40.7614, -73.9776),
             10,  # n_samples
             5.8  # freq_ghz

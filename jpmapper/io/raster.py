@@ -219,7 +219,7 @@ def _rasterize_one(args: Tuple[Path, Path, int, float]) -> Path:
     try:
         rasterize_tile(src, dst, epsg=epsg, resolution=res)
         return dst
-    except (MemoryError, RasterizationError) as e:
+    except Exception as e:
         log.warning(f"Skipping {src.name} due to error: {e}")
         placeholder = out_dir / f"{src.stem}_SKIPPED.txt"
         placeholder.write_text(f"Skipped due to error: {e}")
@@ -348,26 +348,26 @@ def merge_tiles(tifs: Sequence[Path], dst: Path) -> None:
         with rasterio.Env():
             progress.update(merge_task, completed=10, description="[magenta]Opening raster files")
             srcs = [rasterio.open(str(t)) for t in tifs]
+            try:
+                progress.update(merge_task, completed=30, description="[magenta]Computing mosaic")
+                mosaic, transform = rio_merge(srcs, mem_limit=512, nodata=-9999)
 
-            progress.update(merge_task, completed=30, description="[magenta]Computing mosaic")
-            mosaic, transform = rio_merge(srcs, mem_limit=512, nodata=-9999)
+                progress.update(merge_task, completed=70, description="[magenta]Writing merged DSM")
+                meta = srcs[0].meta.copy()
+                meta.update(
+                    height=mosaic.shape[1],
+                    width=mosaic.shape[2],
+                    transform=transform,
+                    nodata=-9999
+                )
 
-            progress.update(merge_task, completed=70, description="[magenta]Writing merged DSM")
-            meta = srcs[0].meta.copy()
-            meta.update(
-                height=mosaic.shape[1],
-                width=mosaic.shape[2],
-                transform=transform,
-                nodata=-9999
-            )
+                with rasterio.open(dst, "w", **meta) as ds:
+                    ds.write(mosaic)
 
-            with rasterio.open(dst, "w", **meta) as ds:
-                ds.write(mosaic)
-
-            progress.update(merge_task, completed=100, description="[magenta]DSM merge complete")
-
-            for src in srcs:
-                src.close()
+                progress.update(merge_task, completed=100, description="[magenta]DSM merge complete")
+            finally:
+                for src in srcs:
+                    src.close()
 
     console.print(f"[green]Merged {len(tifs)} tiles -> {dst.name}[/green]")
     log.debug("Merged %d tiles -> %s", len(tifs), dst)
@@ -397,7 +397,7 @@ def cached_mosaic(
         h.update(f"{p.name}{st.st_mtime_ns}{st.st_size}".encode())
     sig = h.hexdigest()[:8]
 
-    tmp_dir = cache_path.with_suffix(f".tmp-{sig}")
+    tmp_dir = cache_path.with_suffix(f".tmp-{sig}-{os.getpid()}")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     optimal_workers = _get_optimal_workers(workers)

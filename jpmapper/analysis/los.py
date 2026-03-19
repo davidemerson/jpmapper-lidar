@@ -254,69 +254,41 @@ def profile(
     raster_bounds = ds.bounds
     nodata_value = ds.nodata
 
-    def _snap_to_valid_elevation(x, y, max_search_px=50):
-        """Snap a point to nearest valid elevation data."""
-        try:
-            row, col = ds.index(x, y)
-
-            if row < 0 or row >= ds.height or col < 0 or col >= ds.width:
-                return None, 0.0
-
-            for search_radius in range(1, max_search_px + 1):
-                valid_pixels = []
-                for dr in range(-search_radius, search_radius + 1):
-                    for dc in range(-search_radius, search_radius + 1):
-                        if abs(dr) != search_radius and abs(dc) != search_radius:
-                            continue
-
-                        test_row = row + dr
-                        test_col = col + dc
-
-                        if 0 <= test_row < ds.height and 0 <= test_col < ds.width:
-                            try:
-                                pixel_val = ds.read(1, window=((test_row, test_row+1), (test_col, test_col+1)))[0, 0]
-                                if nodata_value is None or pixel_val != nodata_value:
-                                    distance_px = math.sqrt(dr*dr + dc*dc)
-                                    distance_m = distance_px * abs(ds.transform[0])
-                                    valid_pixels.append((float(pixel_val), distance_m))
-                            except Exception:
-                                continue
-
-                if valid_pixels:
-                    valid_pixels.sort(key=lambda p: p[1])
-                    return valid_pixels[0]
-
-            return None, 0.0
-        except Exception:
-            return None, 0.0
-
-    for i, (x, y) in enumerate(zip(xs, ys)):
-        if not (raster_bounds.left <= x <= raster_bounds.right and
-                raster_bounds.bottom <= y <= raster_bounds.top):
-            elevation, snap_dist = _snap_to_valid_elevation(x, y)
-            if elevation is not None:
-                ground[i] = elevation
+    # Vectorized sampling: read all points at once, then fill gaps
+    nodata_count = 0
+    sample_points = list(zip(xs, ys))
+    try:
+        sampled = list(ds.sample(sample_points, 1))
+        for i, val in enumerate(sampled):
+            v = val[0]
+            if nodata_value is not None and v == nodata_value:
+                ground[i] = np.nan
+                nodata_count += 1
             else:
-                ground[i] = 0.0
-        else:
+                ground[i] = float(v)
+    except Exception:
+        # Fallback: sample one by one
+        for i, (x, y) in enumerate(sample_points):
             try:
-                sampled_values = list(ds.sample([(x, y)], 1))
-                elevation = sampled_values[0][0]
-
-                if nodata_value is not None and elevation == nodata_value:
-                    snapped_elevation, snap_dist = _snap_to_valid_elevation(x, y)
-                    if snapped_elevation is not None:
-                        ground[i] = snapped_elevation
-                    else:
-                        ground[i] = 0.0
+                val = list(ds.sample([(x, y)], 1))[0][0]
+                if nodata_value is not None and val == nodata_value:
+                    ground[i] = np.nan
+                    nodata_count += 1
                 else:
-                    ground[i] = float(elevation)
+                    ground[i] = float(val)
             except Exception:
-                snapped_elevation, snap_dist = _snap_to_valid_elevation(x, y)
-                if snapped_elevation is not None:
-                    ground[i] = snapped_elevation
-                else:
-                    ground[i] = 0.0
+                ground[i] = np.nan
+                nodata_count += 1
+
+    # Interpolate NaN gaps from surrounding valid samples
+    if nodata_count > 0:
+        valid_mask = ~np.isnan(ground)
+        if valid_mask.any():
+            indices = np.arange(n_samples)
+            ground = np.interp(indices, indices[valid_mask], ground[valid_mask])
+        else:
+            ground[:] = 0.0
+            logger.warning("Terrain profile has no valid data — using 0")
 
     distance = np.linspace(0, math.hypot(x2 - x1, y2 - y1), n_samples)
     fresnel = _first_fresnel_radius(distance, freq_ghz)
@@ -379,13 +351,35 @@ def _compute_profile_with_dataset(
 
     nodata = ds.nodata if ds.nodata is not None else -9999
 
+    nodata_count = 0
     for i, (x, y) in enumerate(zip(xs, ys)):
         try:
             sampled = list(ds.sample([(x, y)], 1))
             val = sampled[0][0]
-            elevations[i] = 0.0 if (nodata is not None and val == nodata) else float(val)
+            if nodata is not None and val == nodata:
+                elevations[i] = np.nan
+                nodata_count += 1
+            else:
+                elevations[i] = float(val)
         except Exception:
-            elevations[i] = 0.0
+            elevations[i] = np.nan
+            nodata_count += 1
+
+    if nodata_count > 0:
+        logger.warning(
+            "Profile sampling: %d/%d points had no data (will interpolate)",
+            nodata_count, n_samples,
+        )
+        # Interpolate NaN gaps from surrounding valid samples
+        valid_mask = ~np.isnan(elevations)
+        if valid_mask.any():
+            indices = np.arange(n_samples)
+            elevations = np.interp(
+                indices, indices[valid_mask], elevations[valid_mask]
+            )
+        else:
+            logger.warning("Profile has no valid elevation data — using 0m")
+            elevations[:] = 0.0
 
     distances = np.linspace(0, total_distance, n_samples)
     return distances, elevations, total_distance
