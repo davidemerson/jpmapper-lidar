@@ -12,9 +12,11 @@ from hashlib import md5
 from pathlib import Path
 from typing import Sequence, Tuple
 
+import numpy as np
 import laspy
 import rasterio
 from rasterio.merge import merge as rio_merge
+from rasterio.fill import fillnodata as rio_fillnodata
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 
@@ -112,6 +114,28 @@ def _run_pdal(pdict: dict) -> None:
 run_pdal_pipeline = _run_pdal
 
 
+def _fill_nodata(tif: Path, max_search_distance: int = 100) -> None:
+    """Fill nodata gaps in a GeoTIFF using interpolation.
+
+    LiDAR rasterization typically leaves gaps where no points fell.
+    This fills small gaps using rasterio's fillnodata (based on GDAL's
+    inverse-distance-weighted interpolation).
+
+    Args:
+        tif: Path to GeoTIFF to fill in-place.
+        max_search_distance: Maximum pixel distance to search for valid data.
+    """
+    with rasterio.open(tif, "r+") as ds:
+        data = ds.read(1)
+        nodata = ds.nodata if ds.nodata is not None else -9999
+        mask = data != nodata
+        if mask.all():
+            return  # nothing to fill
+        filled = rio_fillnodata(data, mask, max_search_distance=max_search_distance)
+        ds.write(filled, 1)
+        log.debug("Filled nodata gaps in %s (search=%dpx)", tif.name, max_search_distance)
+
+
 def _detect_epsg(src_las: Path) -> int:
     """Auto-detect EPSG code from LAS header.
 
@@ -179,6 +203,8 @@ def rasterize_tile(
     try:
         _run_pdal(_pipeline_dict(src_las, dst_tif, epsg, resolution))
         log.debug("Rasterized %s -> %s", src_las.name, dst_tif.name)
+        if dst_tif.exists():
+            _fill_nodata(dst_tif)
         return dst_tif
     except Exception as e:
         raise RasterizationError(f"Failed to rasterize {src_las}: {e}") from e

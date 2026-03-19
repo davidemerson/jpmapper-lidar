@@ -35,9 +35,9 @@ def _first_fresnel_radius(dist: np.ndarray, freq_ghz: float) -> np.ndarray:
 
 
 def _snap_to_valid(
-    ds: rasterio.DatasetReader, lon: float, lat: float, max_px: int = 5
+    ds: rasterio.DatasetReader, lon: float, lat: float, max_px: int = 50
 ) -> Tuple[Tuple[float, float], float, float]:
-    """Snap WGS84 lon/lat to nearest valid DSM cell within 2m limit.
+    """Snap WGS84 lon/lat to nearest valid DSM cell.
 
     Returns:
       * snapped (lat, lon)
@@ -107,7 +107,7 @@ def is_clear_direct(
     dsm_file: Union[str, Path, rasterio.DatasetReader],
     n_samples: int = 25,
     alt_buffer_m: float = 2.0,
-    snap_max_px: int = 10,
+    snap_max_px: int = 50,
 ) -> bool:
     """Check if line of sight between two points is clear of obstructions.
 
@@ -128,17 +128,19 @@ def is_clear_direct(
     """
     if isinstance(dsm_file, (str, Path)):
         with rasterio.open(dsm_file) as ds:
-            return _is_clear_with_dataset(
+            clear, _, _ = _is_clear_with_dataset(
                 from_lon, from_lat, from_alt,
                 to_lon, to_lat, to_alt,
                 ds, n_samples, alt_buffer_m, snap_max_px
             )
+            return clear
     else:
-        return _is_clear_with_dataset(
+        clear, _, _ = _is_clear_with_dataset(
             from_lon, from_lat, from_alt,
             to_lon, to_lat, to_alt,
             dsm_file, n_samples, alt_buffer_m, snap_max_px
         )
+        return clear
 
 
 def _is_clear_with_dataset(
@@ -151,9 +153,17 @@ def _is_clear_with_dataset(
     ds: rasterio.DatasetReader,
     n_samples: int = 25,
     alt_buffer_m: float = 2.0,
-    snap_max_px: int = 10,
-) -> bool:
-    """Implementation of is_clear using an open dataset."""
+    snap_max_px: int = 50,
+    freq_ghz: float = 5.8,
+) -> Tuple[bool, float, float]:
+    """Implementation of is_clear using an open dataset.
+
+    Returns:
+        Tuple of (is_clear, min_clearance_m, fresnel_pct):
+        - is_clear: True if LOS clears terrain with 60% first Fresnel zone
+        - min_clearance_m: Minimum clearance between LOS line and terrain (m)
+        - fresnel_pct: Worst-case Fresnel zone obstruction (0.0 = fully clear, 1.0 = fully blocked)
+    """
     (from_lat_valid, from_lon_valid), from_ground_alt, from_dx = _snap_to_valid(
         ds, from_lon, from_lat, max_px=snap_max_px
     )
@@ -174,7 +184,41 @@ def _is_clear_with_dataset(
     x = distances / total_distance  # normalized distance 0..1
     los_y = (1 - x) * from_alt_adjusted + x * to_alt_adjusted
 
-    return bool((los_y - alt_buffer_m > elevations).all())
+    # Geometric clearance: LOS line minus terrain
+    clearance = los_y - elevations
+    min_clearance = float(clearance.min())
+
+    # Fresnel zone check: compute first Fresnel radius at each sample point
+    # F1 = sqrt(lambda * d1 * d2 / D) where d1, d2 are distances to endpoints
+    wavelength = 0.3 / freq_ghz  # meters
+    d1 = distances  # distance from start
+    d2 = total_distance - distances  # distance from end
+    # Avoid division by zero at endpoints
+    with np.errstate(invalid='ignore'):
+        f1_radius = np.sqrt(wavelength * d1 * d2 / total_distance)
+    f1_radius = np.nan_to_num(f1_radius, nan=0.0)
+
+    # Required clearance is 60% of F1 radius (standard RF planning threshold)
+    required_clearance = 0.6 * f1_radius
+
+    # Fresnel obstruction: how much of the required clearance zone is blocked
+    # 0.0 = fully clear, 1.0+ = terrain reaches or exceeds LOS line
+    fresnel_margin = clearance - required_clearance
+    worst_margin = float(fresnel_margin.min())
+    if required_clearance.max() > 0:
+        # Normalize: 0 = exactly at 60% F1, negative = obstructed
+        worst_f1_idx = fresnel_margin.argmin()
+        if required_clearance[worst_f1_idx] > 0:
+            fresnel_pct = float(1.0 - clearance[worst_f1_idx] / required_clearance[worst_f1_idx])
+        else:
+            fresnel_pct = 0.0
+    else:
+        fresnel_pct = 0.0
+
+    # Path is clear if 60% of first Fresnel zone is unobstructed at all points
+    is_clear = bool(worst_margin > 0)
+
+    return is_clear, min_clearance, fresnel_pct
 
 
 def profile(
@@ -210,8 +254,8 @@ def profile(
     raster_bounds = ds.bounds
     nodata_value = ds.nodata
 
-    def _snap_to_valid_elevation(x, y, max_search_px=10):
-        """Snap a point to nearest valid elevation data within 2m."""
+    def _snap_to_valid_elevation(x, y, max_search_px=50):
+        """Snap a point to nearest valid elevation data."""
         try:
             row, col = ds.index(x, y)
 
@@ -240,9 +284,7 @@ def profile(
 
                 if valid_pixels:
                     valid_pixels.sort(key=lambda p: p[1])
-                    closest_elev, closest_dist = valid_pixels[0]
-                    if closest_dist <= 2.0:
-                        return closest_elev, closest_dist
+                    return valid_pixels[0]
 
             return None, 0.0
         except Exception:
@@ -252,7 +294,7 @@ def profile(
         if not (raster_bounds.left <= x <= raster_bounds.right and
                 raster_bounds.bottom <= y <= raster_bounds.top):
             elevation, snap_dist = _snap_to_valid_elevation(x, y)
-            if elevation is not None and snap_dist <= 2.0:
+            if elevation is not None:
                 ground[i] = elevation
             else:
                 ground[i] = 0.0
@@ -263,7 +305,7 @@ def profile(
 
                 if nodata_value is not None and elevation == nodata_value:
                     snapped_elevation, snap_dist = _snap_to_valid_elevation(x, y)
-                    if snapped_elevation is not None and snap_dist <= 2.0:
+                    if snapped_elevation is not None:
                         ground[i] = snapped_elevation
                     else:
                         ground[i] = 0.0
@@ -271,7 +313,7 @@ def profile(
                     ground[i] = float(elevation)
             except Exception:
                 snapped_elevation, snap_dist = _snap_to_valid_elevation(x, y)
-                if snapped_elevation is not None and snap_dist <= 2.0:
+                if snapped_elevation is not None:
                     ground[i] = snapped_elevation
                 else:
                     ground[i] = 0.0
@@ -553,35 +595,35 @@ def _is_clear_points(
     snap_distance = max(snap_a, snap_b)
 
     if from_alt is not None and to_alt is not None:
-        result = _is_clear_with_dataset(
+        clear, min_clr, fresnel_pct = _is_clear_with_dataset(
             lon_a, lat_a, from_alt,
             lon_b, lat_b, to_alt,
-            ds, n_samples, 2.0
+            ds, n_samples, 2.0, freq_ghz=freq_ghz
         )
 
-        if result:
+        if clear:
             return True, 0, ground_a, ground_b, snap_distance
         else:
             return False, -1, ground_a, ground_b, snap_distance
     else:
-        result = _is_clear_with_dataset(
+        clear, min_clr, fresnel_pct = _is_clear_with_dataset(
             lon_a, lat_a, 0,
             lon_b, lat_b, 0,
-            ds, n_samples, 2.0
+            ds, n_samples, 2.0, freq_ghz=freq_ghz
         )
 
-        if result:
+        if clear:
             return True, 0, ground_a, ground_b, snap_distance
 
         current_height = step_m
         while current_height <= max_mast_height_m:
-            result = _is_clear_with_dataset(
+            clear, min_clr, fresnel_pct = _is_clear_with_dataset(
                 lon_a, lat_a, current_height,
                 lon_b, lat_b, current_height,
-                ds, n_samples, 2.0
+                ds, n_samples, 2.0, freq_ghz=freq_ghz
             )
 
-            if result:
+            if clear:
                 return True, int(current_height), ground_a, ground_b, snap_distance
 
             current_height += step_m
