@@ -19,17 +19,19 @@ class TestFunctions:
     """Test standalone utility functions."""
 
     def test_first_fresnel_radius(self):
+        total_distance = 2000.0
         dist = np.array([100, 500, 1000])
         freq_ghz = 5.8
-        result = los._first_fresnel_radius(dist, freq_ghz)
+        result = los._first_fresnel_radius(dist, total_distance, freq_ghz)
 
         assert isinstance(result, np.ndarray)
         assert result.shape == dist.shape
+        # Fresnel radius should be largest at midpoint, smaller toward endpoints
         assert result[1] > result[0]
-        assert result[2] > result[1]
+        assert result[2] > result[1]  # 1000 is midpoint of 2000
 
         wavelength = 0.3 / freq_ghz
-        expected = np.sqrt(wavelength * 100 / 2.0)
+        expected = np.sqrt(wavelength * 100 * (total_distance - 100) / total_distance)
         assert abs(result[0] - expected) < 0.001
 
     def test_fresnel_radius_function(self):

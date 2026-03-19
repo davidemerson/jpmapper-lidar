@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from jpmapper.io.las import filter_las_by_bbox, _read_header
-from jpmapper.exceptions import FilterError, FileFormatError
+from jpmapper.exceptions import FilterError, FileFormatError, GeometryError
 
 
 class TestLasIO:
@@ -17,13 +17,13 @@ class TestLasIO:
 
     def test_filter_las_by_bbox_invalid_bbox(self):
         """Test that invalid bounding boxes raise appropriate errors."""
-        with pytest.raises(ValueError, match="expected 4 coordinates"):
+        with pytest.raises(GeometryError, match="expected 4 coordinates"):
             filter_las_by_bbox([], bbox=(-74.01, 40.70, -73.96))
 
-        with pytest.raises(ValueError, match="min coordinates must be less than max"):
+        with pytest.raises(GeometryError, match="min coordinates must be less than max"):
             filter_las_by_bbox([], bbox=(-73.96, 40.70, -74.01, 40.75))
 
-        with pytest.raises(ValueError, match="min coordinates must be less than max"):
+        with pytest.raises(GeometryError, match="min coordinates must be less than max"):
             filter_las_by_bbox([], bbox=(-74.01, 40.75, -73.96, 40.70))
 
     def test_filter_las_by_bbox_file_not_found(self, tmp_path):

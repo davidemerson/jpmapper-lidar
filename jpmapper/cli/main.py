@@ -116,10 +116,3 @@ def debug_dsm(
     
     except Exception as e:
         print(f"❌ Error opening DSM: {e}")
-
-# ────────────────────────────────────────────────────────────────────────────
-# Load commands conditionally
-# ────────────────────────────────────────────────────────────────────────────
-app.add_typer(_lazy("jpmapper.cli.filter").app, name="filter")
-app.add_typer(_lazy("jpmapper.cli.rasterize").app, name="rasterize")
-app.add_typer(_lazy("jpmapper.cli.analyze").app, name="analyze")

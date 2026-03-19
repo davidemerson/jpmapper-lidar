@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
@@ -58,14 +59,14 @@ def filter_las_by_bbox(
     """
     # Validate bbox
     if not isinstance(bbox, tuple) or len(bbox) != 4:
-        raise ValueError(f"bbox expected 4 coordinates, got {len(bbox) if isinstance(bbox, tuple) else bbox}")
+        raise GeometryError(f"bbox expected 4 coordinates, got {len(bbox) if isinstance(bbox, tuple) else bbox}")
 
     if not all(isinstance(x, (int, float)) for x in bbox):
-        raise ValueError(f"Invalid bbox coordinates: {bbox}")
+        raise GeometryError(f"Invalid bbox coordinates: {bbox}")
 
     min_x, min_y, max_x, max_y = bbox
     if min_x >= max_x or min_y >= max_y:
-        raise ValueError("min coordinates must be less than max")
+        raise GeometryError("min coordinates must be less than max")
 
     try:
         query_geom = box(min_x, min_y, max_x, max_y)
@@ -105,7 +106,7 @@ def filter_las_by_bbox(
         for src in selected:
             tgt = dst_dir / src.name
             try:
-                tgt.write_bytes(src.read_bytes())
+                shutil.copy2(src, tgt)
                 copied.append(tgt)
             except Exception as e:
                 copy_errors.append(f"{src.name}: {e}")

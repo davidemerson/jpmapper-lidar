@@ -48,9 +48,13 @@ def _unit_factor(crs) -> float:
     return 1.0
 
 
-def _first_fresnel_radius(dist: np.ndarray, freq_ghz: float) -> np.ndarray:
+def _first_fresnel_radius(dist: np.ndarray, total_distance: float, freq_ghz: float) -> np.ndarray:
+    """First Fresnel radius: sqrt(lambda * d1 * d2 / D)."""
     wavelength = 0.3 / freq_ghz  # lambda = c / f
-    return np.sqrt(wavelength * dist / 2.0)
+    d2 = total_distance - dist
+    with np.errstate(invalid='ignore'):
+        result = np.sqrt(wavelength * dist * d2 / total_distance)
+    return np.nan_to_num(result, nan=0.0)
 
 
 def _snap_to_valid(
@@ -89,7 +93,10 @@ def _snap_to_valid(
 
         mask = window != nodata
         if mask.any():
-            r_off, c_off = np.argwhere(mask)[0]
+            valid_pixels = np.argwhere(mask)
+            center = np.array([d, d])  # center of the window
+            dists = np.linalg.norm(valid_pixels - center, axis=1)
+            r_off, c_off = valid_pixels[dists.argmin()]
             r_valid, c_valid = row - d + r_off, col - d + c_off
             x_valid = ds.transform.c + c_valid * ds.transform.a
             y_valid = ds.transform.f + r_valid * ds.transform.e
@@ -106,7 +113,7 @@ def _snap_to_valid(
 
             uf = _unit_factor(ds.crs)
             elev = float(elev_window[0, 0]) * uf
-            dx = math.hypot(lon_valid - lon, lat_valid - lat) * 111_320  # ~ m per deg
+            dx = distance_between_points((lat, lon), (lat_valid, lon_valid))
             return (lat_valid, lon_valid), elev, dx
 
     raise NoDataError(
@@ -128,6 +135,7 @@ def is_clear_direct(
     n_samples: int = 25,
     alt_buffer_m: float = 2.0,
     snap_max_px: int = 50,
+    freq_ghz: float = 5.8,
 ) -> bool:
     """Check if line of sight between two points is clear of obstructions.
 
@@ -151,14 +159,16 @@ def is_clear_direct(
             clear, _, _ = _is_clear_with_dataset(
                 from_lon, from_lat, from_alt,
                 to_lon, to_lat, to_alt,
-                ds, n_samples, alt_buffer_m, snap_max_px
+                ds, n_samples, alt_buffer_m, snap_max_px,
+                freq_ghz=freq_ghz,
             )
             return clear
     else:
         clear, _, _ = _is_clear_with_dataset(
             from_lon, from_lat, from_alt,
             to_lon, to_lat, to_alt,
-            dsm_file, n_samples, alt_buffer_m, snap_max_px
+            dsm_file, n_samples, alt_buffer_m, snap_max_px,
+            freq_ghz=freq_ghz,
         )
         return clear
 
@@ -224,7 +234,6 @@ def _is_clear_with_dataset(
     # Fresnel obstruction: how much of the required clearance zone is blocked
     # 0.0 = fully clear, 1.0+ = terrain reaches or exceeds LOS line
     fresnel_margin = clearance - required_clearance
-    worst_margin = float(fresnel_margin.min())
     if required_clearance.max() > 0:
         # Normalize: 0 = exactly at 60% F1, negative = obstructed
         worst_f1_idx = fresnel_margin.argmin()
@@ -236,7 +245,7 @@ def _is_clear_with_dataset(
         fresnel_pct = 0.0
 
     # Path is clear if 60% of first Fresnel zone is unobstructed at all points
-    is_clear = bool(worst_margin > 0)
+    is_clear = bool(fresnel_margin.min() > 0)
 
     return is_clear, min_clearance, fresnel_pct
 
@@ -260,8 +269,8 @@ def profile(
     Returns:
         Tuple of (distances_m, terrain_heights_m, fresnel_radii_m)
     """
-    (lat_a, lon_a), gA, _ = _snap_to_valid(ds, pt_a[1], pt_a[0])
-    (lat_b, lon_b), gB, _ = _snap_to_valid(ds, pt_b[1], pt_b[0])
+    (lat_a, lon_a), _, _ = _snap_to_valid(ds, pt_a[1], pt_a[0])
+    (lat_b, lon_b), _, _ = _snap_to_valid(ds, pt_b[1], pt_b[0])
 
     uf = _unit_factor(ds.crs)
     tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
@@ -272,7 +281,6 @@ def profile(
     ys = np.linspace(y1, y2, n_samples)
     ground = np.empty(n_samples, dtype=float)
 
-    raster_bounds = ds.bounds
     nodata_value = ds.nodata
 
     # Vectorized sampling: read all points at once, then fill gaps
@@ -288,6 +296,7 @@ def profile(
             else:
                 ground[i] = float(v)
     except Exception:
+        logger.debug("Vectorized sampling failed, falling back to per-point sampling", exc_info=True)
         # Fallback: sample one by one
         for i, (x, y) in enumerate(sample_points):
             try:
@@ -298,6 +307,7 @@ def profile(
                 else:
                     ground[i] = float(val)
             except Exception:
+                logger.debug("Failed to sample point (%s, %s)", x, y, exc_info=True)
                 ground[i] = np.nan
                 nodata_count += 1
 
@@ -313,7 +323,7 @@ def profile(
 
     ground *= uf
     distance = np.linspace(0, math.hypot(x2 - x1, y2 - y1) * uf, n_samples)
-    fresnel = _first_fresnel_radius(distance, freq_ghz)
+    fresnel = _first_fresnel_radius(distance, distance[-1], freq_ghz)
 
     return distance, ground, fresnel
 
@@ -357,8 +367,8 @@ def _compute_profile_with_dataset(
     n_samples: int = 256,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """Internal implementation to compute profile with an open dataset."""
-    (lat_a, lon_a), gA, _ = _snap_to_valid(ds, point_a[1], point_a[0])
-    (lat_b, lon_b), gB, _ = _snap_to_valid(ds, point_b[1], point_b[0])
+    (lat_a, lon_a), _, _ = _snap_to_valid(ds, point_a[1], point_a[0])
+    (lat_b, lon_b), _, _ = _snap_to_valid(ds, point_b[1], point_b[0])
 
     uf = _unit_factor(ds.crs)
     tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
@@ -375,18 +385,31 @@ def _compute_profile_with_dataset(
     nodata = ds.nodata if ds.nodata is not None else -9999
 
     nodata_count = 0
-    for i, (x, y) in enumerate(zip(xs, ys)):
-        try:
-            sampled = list(ds.sample([(x, y)], 1))
-            val = sampled[0][0]
-            if nodata is not None and val == nodata:
+    sample_points = list(zip(xs, ys))
+    try:
+        sampled = list(ds.sample(sample_points, 1))
+        for i, val in enumerate(sampled):
+            v = val[0]
+            if nodata is not None and v == nodata:
                 elevations[i] = np.nan
                 nodata_count += 1
             else:
-                elevations[i] = float(val)
-        except Exception:
-            elevations[i] = np.nan
-            nodata_count += 1
+                elevations[i] = float(v)
+    except Exception:
+        logger.debug("Vectorized sampling failed, falling back to per-point sampling", exc_info=True)
+        # Fallback: sample one by one
+        for i, (x, y) in enumerate(sample_points):
+            try:
+                val = list(ds.sample([(x, y)], 1))[0][0]
+                if nodata is not None and val == nodata:
+                    elevations[i] = np.nan
+                    nodata_count += 1
+                else:
+                    elevations[i] = float(val)
+            except Exception:
+                logger.debug("Failed to sample point (%s, %s)", x, y, exc_info=True)
+                elevations[i] = np.nan
+                nodata_count += 1
 
     if nodata_count > 0:
         logger.warning(
@@ -490,7 +513,8 @@ def fresnel_radius(distance_m: float, distance_total_m: float, frequency_ghz: fl
         raise ValueError("frequency_ghz must be positive")
 
     distance_to_other_m = distance_total_m - distance_m
-    return 17.32 * math.sqrt(distance_m * distance_to_other_m / (frequency_ghz * distance_total_m))
+    # 17.32 is for distances in km; convert to meters: 17.32 / sqrt(1000) ≈ 0.5477
+    return 17.32 / math.sqrt(1000) * math.sqrt(distance_m * distance_to_other_m / (frequency_ghz * distance_total_m))
 
 
 def point_to_pixel(point: Tuple[float, float], transform: Union[list, tuple]) -> Tuple[int, int]:
@@ -633,17 +657,29 @@ def _is_clear_points(
         if clear:
             return True, 0, ground_a, ground_b, snap_distance
 
-        current_height = step_m
-        while current_height <= max_mast_height_m:
-            clear, min_clr, fresnel_pct = _is_clear_with_dataset(
-                lon_a, lat_a, current_height,
-                lon_b, lat_b, current_height,
+        # Binary search for minimum mast height that clears
+        lo, hi = 0.0, float(max_mast_height_m)
+
+        # First check if max height clears at all
+        clear_max, _, _ = _is_clear_with_dataset(
+            lon_a, lat_a, hi,
+            lon_b, lat_b, hi,
+            ds, n_samples, 2.0, freq_ghz=freq_ghz
+        )
+        if not clear_max:
+            return False, -1, ground_a, ground_b, snap_distance
+
+        # Binary search: find minimum clearing height
+        while hi - lo > step_m:
+            mid = (lo + hi) / 2.0
+            clear_mid, _, _ = _is_clear_with_dataset(
+                lon_a, lat_a, mid,
+                lon_b, lat_b, mid,
                 ds, n_samples, 2.0, freq_ghz=freq_ghz
             )
+            if clear_mid:
+                hi = mid
+            else:
+                lo = mid
 
-            if clear:
-                return True, int(current_height), ground_a, ground_b, snap_distance
-
-            current_height += step_m
-
-        return False, -1, ground_a, ground_b, snap_distance
+        return True, int(math.ceil(hi)), ground_a, ground_b, snap_distance

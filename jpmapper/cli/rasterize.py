@@ -16,7 +16,6 @@ app = typer.Typer(
         "Examples:\n"
         "  jpmapper rasterize tile input.las output.tif\n"
         "  jpmapper rasterize tile data.las dsm.tif --resolution 0.5 --epsg 4326\n"
-        "  jpmapper rasterize tile lidar.laz result.tif --workers 8\n\n"
         "For enhanced metadata-aware rasterization, ensure all dependencies "
         "are installed (see requirements.txt)."
     )
@@ -39,7 +38,7 @@ def callback():
         "Examples:\n"
         "  jpmapper rasterize tile input.las output.tif\n"
         "  jpmapper rasterize tile data.las dsm.tif --resolution 0.25\n"
-        "  jpmapper rasterize tile lidar.laz result.tif --epsg 6539 --workers 4\n\n"
+        "  jpmapper rasterize tile lidar.laz result.tif --epsg 6539\n\n"
         "Tip: Use --resolution based on point density (e.g., 0.1m for high-density, "
         "0.5m for lower density data)."
     )
@@ -62,11 +61,6 @@ def rasterize_tile(
         0.1,
         "--resolution",
         help="Grid cell size in meters (smaller = higher detail, larger file size)",
-    ),
-    workers: int | None = typer.Option(
-        None,
-        "--workers",
-        help="Number of parallel processing workers (auto-detected based on CPU cores if omitted)",
     ),
 ):
     """Rasterize a LAS/LAZ file to a GeoTIFF DSM."""

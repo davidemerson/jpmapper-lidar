@@ -108,7 +108,10 @@ def _run_pdal(pdict: dict) -> None:
     else:
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tmp:
             tmp.write(json.dumps(pdict))
-        subprocess.run(["pdal", "pipeline", tmp.name], check=True)
+        try:
+            subprocess.run(["pdal", "pipeline", tmp.name], check=True)
+        finally:
+            os.unlink(tmp.name)
 
 # Export _run_pdal with a public name for testing
 run_pdal_pipeline = _run_pdal

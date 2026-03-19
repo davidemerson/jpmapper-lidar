@@ -57,12 +57,12 @@ class TestConfig:
             Config(config_path="non_existent.json")
     
     @patch('jpmapper.config.Path.exists')
-    @patch('builtins.open', side_effect=Exception("Error reading file"))
+    @patch('builtins.open', side_effect=OSError("Error reading file"))
     def test_file_read_error(self, mock_open, mock_exists):
         """Test that an error reading the file raises ConfigurationError."""
         # Setup mock
         mock_exists.return_value = True
-        
+
         # Check that an error reading the file raises ConfigurationError
         with pytest.raises(ConfigurationError, match="Error reading configuration file"):
             Config(config_path="config.json")

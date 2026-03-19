@@ -4,8 +4,9 @@ Enhanced filtering API with shapefile support for JPMapper
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
-from typing import Iterable, Optional, List, Tuple, Union
+from typing import Any, Iterable, Optional, List, Tuple, Union
 
 try:
     import geopandas as gpd
@@ -102,13 +103,16 @@ def filter_by_shapefile(
         # Get shapefile CRS
         shapefile_crs = gdf.crs
         
+        # Materialize to list so both functions can iterate
+        las_files = list(las_files)
+
         # Validate CRS compatibility if requested
         if validate_crs:
             _validate_crs_compatibility(las_files, shapefile_crs)
-        
+
         # Filter LAS files using the shapefile geometry
         return _filter_las_by_geometry(
-            las_files, 
+            las_files,
             boundary_geom, 
             shapefile_crs,
             dst_dir=dst_dir
@@ -158,7 +162,7 @@ def _validate_crs_compatibility(las_files: Iterable[Path], shapefile_crs: CRS) -
 
 def _filter_las_by_geometry(
     las_files: Iterable[Path],
-    boundary_geom: Union[Polygon, any],  # Shapely geometry
+    boundary_geom: Union[Polygon, Any],  # Shapely geometry
     boundary_crs: CRS,
     *,
     dst_dir: Optional[Path] = None,
@@ -227,7 +231,7 @@ def _copy_files_to_destination(src_files: List[Path], dst_dir: Path) -> List[Pat
     for src_file in src_files:
         dst_file = dst_dir / src_file.name
         try:
-            dst_file.write_bytes(src_file.read_bytes())
+            shutil.copy2(src_file, dst_file)
             copied.append(dst_file)
         except Exception as e:
             raise FilterError(f"Failed to copy {src_file.name}: {e}") from e

@@ -26,7 +26,7 @@ class TestFunctions:
             distance_total_m=2000,
             frequency_ghz=5.8,
         )
-        expected = 17.32 * np.sqrt(1000 * 1000 / (5.8 * 2000))
+        expected = 17.32 / np.sqrt(1000) * np.sqrt(1000 * 1000 / (5.8 * 2000))
         assert radius == pytest.approx(expected, rel=1e-6)
 
         with pytest.raises(ValueError, match="must be positive"):

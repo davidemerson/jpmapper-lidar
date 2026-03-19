@@ -57,9 +57,11 @@ class Config:
                     file_config = json.load(f)
                     self._config.update(file_config)
                 except Exception as e:
-                    raise ConfigurationError(f"Invalid configuration file format: {e}")
-        except Exception as e:
-            raise ConfigurationError(f"Error reading configuration file: {e}")
+                    raise ConfigurationError(f"Invalid configuration file format: {e}") from e
+        except ConfigurationError:
+            raise
+        except OSError as e:
+            raise ConfigurationError(f"Error reading configuration file: {e}") from e
     
     def __getattr__(self, name: str) -> Any:
         """Support attribute-style access: config.debug"""
