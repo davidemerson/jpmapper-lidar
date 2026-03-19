@@ -253,7 +253,7 @@ class MetadataAwareRasterizer:
                 )
                 
                 # Transform to shapefile CRS if needed
-                if las_crs and las_crs != gdf.crs:
+                if las_crs and gdf.crs and las_crs != gdf.crs:
                     from pyproj import Transformer
                     transformer = Transformer.from_crs(las_crs, gdf.crs, always_xy=True)
                     min_x, min_y = transformer.transform(header.mins[0], header.mins[1])
@@ -261,8 +261,8 @@ class MetadataAwareRasterizer:
                     las_bounds = box(min_x, min_y, max_x, max_y)
                 
                 # Find intersecting tiles
-                intersecting = gdf[gdf.geometry.intersects(las_bounds)]
-                
+                intersecting = gdf[gdf.geometry.intersects(las_bounds)].copy()
+
                 if len(intersecting) > 0:
                     # Return the tile with the largest intersection area
                     intersecting['intersection_area'] = intersecting.geometry.intersection(las_bounds).area

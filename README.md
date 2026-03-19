@@ -262,6 +262,61 @@ JPMapperError
   └── FilterError
 ```
 
+## Working with NYC Mesh (meshdb) Data
+
+JPMapper includes test data derived from the [NYC Mesh](https://www.nycmesh.net/) network database ([meshdb](https://github.com/nycmeshnet/meshdb)). This enables end-to-end testing against real-world wireless network deployments in New York City.
+
+### Data Sources
+
+- **LiDAR**: NYC 2021 Topobathymetric LiDAR (EPSG:6539, US survey feet). Tiles are 2500×2500 ft.
+- **Node locations**: Pulled from the meshdb public API at `https://db.nycmesh.net/api/v1/mapdata/nodes/` and `https://db.nycmesh.net/api/v1/mapdata/links/`
+- **Test CSV**: `tests/data/meshdb_points.csv` contains real node-to-node wireless links with coordinates and computed mast heights
+
+### Preparing LAS Data
+
+The LAS files are not included in the repository (gitignored due to size). To set up local test data:
+
+1. Obtain NYC 2021 LiDAR tiles covering the Brooklyn/Manhattan area (x=982500–1012500, y=175000–210000 in EPSG:6539)
+2. Place `.las` files in `NYC_2021/las/`
+3. Run the analysis to rasterize and test:
+
+```python
+from pathlib import Path
+from jpmapper.cli.analyze_utils import analyze_csv_file
+
+results = analyze_csv_file(
+    csv_path=Path("tests/data/meshdb_points.csv"),
+    las_dir=Path("NYC_2021/las/"),
+    cache=Path("NYC_2021/dsm_cache.tif"),
+    epsg=6539,
+    resolution=1.0,
+    workers=4,
+    output_format="json",
+    output_path=Path("NYC_2021/meshdb_results.json"),
+)
+```
+
+### Computing Mast Heights from meshdb
+
+The meshdb API provides node altitude (meters above sea level). To compute effective mast heights for LOS analysis:
+
+```
+mast_height = max(2.0, node_altitude - dsm_height_at_node + 2.0)
+```
+
+Where `dsm_height_at_node` is the DSM surface elevation (converted to meters) at the node's coordinates. The +2.0m accounts for the antenna being above the building peak. The meshdb altitude typically matches the DSM surface closely (within ±5m for most installed nodes), since both represent the building rooftop.
+
+### Understanding Results
+
+In dense urban environments like NYC, most LOS paths will show obstructions — this is physically correct. The DSM captures building tops, and a straight-line path between two rooftop antennas will cross taller intervening buildings. Real-world mesh links may still function due to:
+
+- RF diffraction and multipath propagation
+- Higher actual antenna placement than recorded in meshdb
+- Non-line-of-sight (NLOS) techniques used by modern radios
+- Some "active" links in meshdb being non-wireless (VPN, fiber, ethernet)
+
+The analysis is conservative by design: it checks pure geometric line-of-sight plus 60% first Fresnel zone clearance. Links that pass this check are very likely to work; links that fail may still work with reduced signal quality.
+
 ## Testing
 
 ```bash

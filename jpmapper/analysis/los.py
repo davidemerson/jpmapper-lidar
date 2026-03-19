@@ -437,6 +437,7 @@ def compute_profile_with_coords(
     point_a: Tuple[float, float],
     point_b: Tuple[float, float],
     n_samples: int = 256,
+    freq_ghz: float = 5.8,
 ) -> Tuple[np.ndarray, np.ndarray, float, List[Tuple[float, float]]]:
     """Compute terrain profile between two points, including sampled coordinates.
 
@@ -445,6 +446,7 @@ def compute_profile_with_coords(
         point_a: First point as (latitude, longitude)
         point_b: Second point as (latitude, longitude)
         n_samples: Number of samples along the path
+        freq_ghz: Frequency in GHz for Fresnel zone calculations
 
     Returns:
         Tuple of (distances_m, terrain_heights_m, total_distance_m, sample_coords)
@@ -454,10 +456,10 @@ def compute_profile_with_coords(
     """
     try:
         if not isinstance(dsm_path, (str, Path)):
-            return _compute_profile_with_coords_dataset(dsm_path, point_a, point_b, n_samples)
+            return _compute_profile_with_coords_dataset(dsm_path, point_a, point_b, n_samples, freq_ghz)
 
         with rasterio.open(dsm_path) as ds:
-            return _compute_profile_with_coords_dataset(ds, point_a, point_b, n_samples)
+            return _compute_profile_with_coords_dataset(ds, point_a, point_b, n_samples, freq_ghz)
     except (AnalysisError, NoDataError):
         raise
     except Exception as e:
@@ -469,9 +471,10 @@ def _compute_profile_with_coords_dataset(
     point_a: Tuple[float, float],
     point_b: Tuple[float, float],
     n_samples: int = 256,
+    freq_ghz: float = 5.8,
 ) -> Tuple[np.ndarray, np.ndarray, float, List[Tuple[float, float]]]:
     """Internal implementation to compute profile with an open dataset, returning coordinates."""
-    distances, elevations, fresnel = profile(ds, point_a, point_b, n_samples, freq_ghz=5.8)
+    distances, elevations, fresnel = profile(ds, point_a, point_b, n_samples, freq_ghz=freq_ghz)
     total_distance = distances[-1] if len(distances) > 0 else 0.0
 
     tf_wgs84_to_dsm = Transformer.from_crs(4326, ds.crs, always_xy=True)

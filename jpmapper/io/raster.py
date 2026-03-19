@@ -7,7 +7,7 @@ import os
 import subprocess
 import tempfile
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from hashlib import md5
 from pathlib import Path
 from typing import Sequence, Tuple
@@ -54,8 +54,8 @@ def _get_optimal_workers(workers: int | None = None) -> int:
             log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count}, "
                     f"Available memory: {available_memory_gb:.1f}GB)")
             return optimal_workers
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("psutil worker detection failed: %s", e)
 
     optimal_workers = max(1, min(8, cpu_count - 1))
     log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count})")
@@ -284,7 +284,6 @@ def rasterize_dir_parallel(
             with ProcessPoolExecutor(max_workers=optimal_workers) as pool:
                 future_to_task = {pool.submit(_rasterize_one, task): task for task in tasks}
 
-                from concurrent.futures import as_completed
                 for future in as_completed(future_to_task):
                     task = future_to_task[future]
                     src_file = task[0]
@@ -356,6 +355,7 @@ def merge_tiles(tifs: Sequence[Path], dst: Path) -> None:
                 progress.update(merge_task, completed=70, description="[magenta]Writing merged DSM")
                 meta = srcs[0].meta.copy()
                 meta.update(
+                    count=mosaic.shape[0],
                     height=mosaic.shape[1],
                     width=mosaic.shape[2],
                     transform=transform,

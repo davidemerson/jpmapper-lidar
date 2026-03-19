@@ -162,20 +162,17 @@ def _get_profile_details(dsm_path: Path, point_a: Tuple[float, float], point_b: 
             x1, y1 = tf_from_wgs84.transform(point_a[1], point_a[0])
             x2, y2 = tf_from_wgs84.transform(point_b[1], point_b[0])
 
-            for i, (dist, terrain_h, fresnel_r, los_h) in enumerate(zip(distances, terrain_heights, fresnel_radii, los_heights)):
-                los_clearance = terrain_h - los_h
-                fresnel_clearance = terrain_h - (los_h + fresnel_r)
+            # Calculate antenna heights at endpoints with mast heights (constant across loop)
+            antenna_a_height = float(terrain_heights[0]) + mast_a_height if len(terrain_heights) > 0 else mast_a_height
+            antenna_b_height = float(terrain_heights[-1]) + mast_b_height if len(terrain_heights) > 0 else mast_b_height
 
+            for i, (dist, terrain_h, fresnel_r, los_h) in enumerate(zip(distances, terrain_heights, fresnel_radii, los_heights)):
                 progress_ratio = dist / total_distance if total_distance > 0 else 0
 
                 sample_x = x1 + (x2 - x1) * progress_ratio
                 sample_y = y1 + (y2 - y1) * progress_ratio
                 sample_lon, sample_lat = tf_to_wgs84.transform(sample_x, sample_y)
-                
-                # Calculate antenna heights at endpoints with mast heights
-                antenna_a_height = float(terrain_heights[0]) + mast_a_height if len(terrain_heights) > 0 else mast_a_height
-                antenna_b_height = float(terrain_heights[-1]) + mast_b_height if len(terrain_heights) > 0 else mast_b_height
-                
+
                 # Calculate actual line-of-sight height at this point (with mast heights)
                 actual_los_height = antenna_a_height + (antenna_b_height - antenna_a_height) * progress_ratio
                 
@@ -192,11 +189,12 @@ def _get_profile_details(dsm_path: Path, point_a: Tuple[float, float], point_b: 
                     "fresnel_radius_m": float(fresnel_r),
                     "clearance_above_terrain_m": float(actual_los_height - terrain_h),
                     "fresnel_clearance_m": float(actual_los_height - (terrain_h + fresnel_r)),
-                    "is_obstruction": los_clearance > 0.1  # Terrain blocks direct line-of-sight
+                    "is_obstruction": bool((terrain_h - actual_los_height) > 0.1)  # Terrain blocks antenna-to-antenna line-of-sight
                 }
                 sample_points.append(sample_point)
                 
-                if los_clearance > 0.1:  # Terrain blocks direct line-of-sight
+                los_clearance = terrain_h - actual_los_height
+                if los_clearance > 0.1:  # Terrain blocks antenna-to-antenna line-of-sight
                     # Calculate Fresnel zone blockage percentage
                     if fresnel_r > 0:
                         fresnel_blockage_pct = min(100.0, max(0.0, (los_clearance / fresnel_r) * 100))
@@ -508,8 +506,8 @@ def analyze_csv_file(
             dsm_path = r.cached_mosaic(
                 las_dir, 
                 cache, 
-                epsg=epsg or 6539, 
-                resolution=resolution or 0.1,
+                epsg=epsg if epsg is not None else 6539,
+                resolution=resolution if resolution is not None else 0.1,
                 workers=workers  # Pass workers to rasterization too
             )
             logger.info(f"Generated DSM from LAS files: {dsm_path}")
@@ -709,8 +707,20 @@ def analyze_csv_file(
         # Save results if output path specified
         if output_path:
             if output_format.lower() == "json":
+                import numpy as np
+                class NumpyEncoder(json.JSONEncoder):
+                    def default(self, obj):
+                        if isinstance(obj, (np.integer,)):
+                            return int(obj)
+                        if isinstance(obj, (np.floating,)):
+                            return float(obj)
+                        if isinstance(obj, (np.bool_,)):
+                            return bool(obj)
+                        if isinstance(obj, np.ndarray):
+                            return obj.tolist()
+                        return super().default(obj)
                 with open(output_path, 'w') as f:
-                    json.dump(results, f, indent=2)
+                    json.dump(results, f, indent=2, cls=NumpyEncoder)
                 console.print(f"[cyan]💾 Results saved to: {output_path} (JSON format)[/cyan]")
             elif output_format.lower() == "csv":
                 if results:

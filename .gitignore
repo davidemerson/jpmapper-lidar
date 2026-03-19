@@ -27,6 +27,8 @@ build/
 results/
 *.json
 *.png
+NYC_2021/
+*.las
 
 # Conda environment files
 environment.yml

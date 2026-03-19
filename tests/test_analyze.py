@@ -5,6 +5,7 @@ import textwrap
 import pytest
 
 from jpmapper.analysis.los import is_clear
+from jpmapper.exceptions import NoDataError
 from jpmapper.io import raster as r
 
 
@@ -30,7 +31,10 @@ def test_links_match_expected(dsm: Path):
             b = (float(row["point_b_lat"]), float(row["point_b_lon"]))
             expected = row["expected_clear"].lower() == "true"
 
-            result, mast, gA, gB, snap_d = is_clear(dsm, a, b, freq_ghz=5.8)
+            try:
+                result, mast, gA, gB, snap_d = is_clear(dsm, a, b, freq_ghz=5.8)
+            except NoDataError:
+                continue  # outside DSM coverage
 
             if gA is None:  # outside DSM – ignore
                 continue
