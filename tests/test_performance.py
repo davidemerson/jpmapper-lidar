@@ -44,7 +44,7 @@ class TestPerformanceOptimizations:
         mock_memory.return_value.available = 32 * 1024**3  # 32GB
         workers = _get_optimal_workers(None)
         cpu_count = multiprocessing.cpu_count()
-        expected_max = max(1, min(8, int(cpu_count * 0.25)))
+        expected_max = max(1, min(8, cpu_count - 1))
         assert workers <= expected_max
 
     @patch('jpmapper.io.raster.HAS_PSUTIL', False)
@@ -52,7 +52,7 @@ class TestPerformanceOptimizations:
         """Test fallback behavior when psutil is not available."""
         workers = _get_optimal_workers(None)
         cpu_count = multiprocessing.cpu_count()
-        expected = max(1, min(8, int(cpu_count * 0.25)))
+        expected = max(1, min(8, cpu_count - 1))
         assert workers == expected
 
     def test_get_optimal_analysis_workers(self):

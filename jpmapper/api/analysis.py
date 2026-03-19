@@ -15,7 +15,7 @@ import rasterio
 
 from jpmapper.analysis.los import is_clear as _is_clear, profile as _profile, distance_between_points as _geodetic_distance
 from jpmapper.analysis.plots import save_profile_png as _save_profile_png
-from jpmapper.exceptions import AnalysisError, LOSError, GeometryError
+from jpmapper.exceptions import AnalysisError, LOSError, GeometryError, NoDataError
 
 
 def analyze_los(
@@ -107,7 +107,7 @@ def analyze_los(
 
     def _run_analysis(ds):
         if max_mast_height_m is not None:
-            is_clear, mast_height, gnd_a, gnd_b, snap_dist = _is_clear(
+            is_clear, mast_height, gnd_a, gnd_b, snap_dist, min_clearance = _is_clear(
                 ds, point_a, point_b,
                 freq_ghz=freq_ghz,
                 max_mast_height_m=max_mast_height_m,
@@ -121,10 +121,10 @@ def analyze_los(
                 "surface_height_b_m": gnd_b,
                 "distance_m": geodetic_dist_m,
                 "snap_distance_m": snap_dist,
-                "clearance_min_m": 0.0,
+                "clearance_min_m": min_clearance,
             }
         else:
-            is_clear, _, gnd_a, gnd_b, snap_dist = _is_clear(
+            is_clear, _, gnd_a, gnd_b, snap_dist, min_clearance = _is_clear(
                 ds, point_a, point_b,
                 freq_ghz=freq_ghz,
                 from_alt=mast_a_height_m,
@@ -139,7 +139,7 @@ def analyze_los(
                 "surface_height_b_m": gnd_b,
                 "distance_m": geodetic_dist_m,
                 "snap_distance_m": snap_dist,
-                "clearance_min_m": 0.0,
+                "clearance_min_m": min_clearance,
             }
 
     try:
@@ -150,11 +150,11 @@ def analyze_los(
             return _run_analysis(dsm_path)
     except (GeometryError, LOSError, AnalysisError, FileNotFoundError, ValueError):
         raise
+    except NoDataError as e:
+        raise GeometryError(f"Points outside valid DSM area: {e}") from e
     except rasterio.errors.RasterioError as e:
         raise AnalysisError(f"Error opening or reading DSM: {e}") from e
     except Exception as e:
-        if "No valid DSM" in str(e):
-            raise GeometryError(f"Points outside valid DSM area: {e}") from e
         raise LOSError(f"LOS analysis failed: {e}") from e
 
 

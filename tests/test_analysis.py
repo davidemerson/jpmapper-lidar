@@ -98,7 +98,7 @@ class TestAnalysisWithRealRasters:
         pt_a, pt_b = self._get_endpoints(flat_dsm)
 
         # Flat terrain needs a small mast to clear the 2m alt_buffer
-        is_clear_result, mast_height, ground_a, ground_b, distance = is_clear(
+        is_clear_result, mast_height, ground_a, ground_b, distance, _min_clr = is_clear(
             str(flat_dsm), pt_a, pt_b, freq_ghz=5.8, max_mast_height_m=5, step_m=1.0
         )
 
@@ -110,7 +110,7 @@ class TestAnalysisWithRealRasters:
     def test_is_clear_with_blocked_path(self, hill_dsm):
         pt_a, pt_b = self._get_endpoints(hill_dsm, 980050, 980950)
 
-        is_clear_result, mast_height, ground_a, ground_b, distance = is_clear(
+        is_clear_result, mast_height, ground_a, ground_b, distance, _min_clr = is_clear(
             str(hill_dsm), pt_a, pt_b, freq_ghz=5.8, max_mast_height_m=0
         )
 
@@ -120,13 +120,13 @@ class TestAnalysisWithRealRasters:
         pt_a, pt_b = self._get_endpoints(hill_dsm, 980050, 980950)
 
         # No mast allowed -> blocked
-        is_clear_result, mast_height, _, _, _ = is_clear(
+        is_clear_result, mast_height, _, _, _, _ = is_clear(
             str(hill_dsm), pt_a, pt_b, freq_ghz=5.8, max_mast_height_m=0
         )
         assert is_clear_result is False
 
         # With a tall mast -> should find a solution
-        is_clear_result, mast_height, _, _, _ = is_clear(
+        is_clear_result, mast_height, _, _, _, _ = is_clear(
             str(hill_dsm), pt_a, pt_b, freq_ghz=5.8, max_mast_height_m=200, step_m=10.0
         )
         assert is_clear_result is True

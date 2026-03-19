@@ -12,7 +12,7 @@ from typing import Iterable, Optional, List, Tuple
 
 from jpmapper.io.las import filter_las_by_bbox as _filter_las_by_bbox
 from jpmapper import config as _config
-from jpmapper.exceptions import FilterError, ConfigurationError
+from jpmapper.exceptions import FilterError, ConfigurationError, GeometryError, FileFormatError
 
 
 def filter_by_bbox(
@@ -60,5 +60,7 @@ def filter_by_bbox(
     
     try:
         return _filter_las_by_bbox(las_files, bbox=bbox, dst_dir=dst_dir)
+    except (GeometryError, FilterError, FileFormatError):
+        raise
     except Exception as e:
         raise FilterError(f"Error filtering LAS files: {e}") from e

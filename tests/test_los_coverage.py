@@ -297,7 +297,7 @@ class TestIsClear:
 
         # With max_mast_height_m=5 and step_m=1, the iterative search should
         # find a small mast height that clears the 2m buffer over flat terrain
-        clear, mast_height, ground_a, ground_b, snap_dist = los.is_clear(
+        clear, mast_height, ground_a, ground_b, snap_dist, _min_clr = los.is_clear(
             str(flat_dsm), pt_a, pt_b, freq_ghz=5.8, max_mast_height_m=5, step_m=1.0
         )
 
@@ -317,7 +317,7 @@ class TestIsClear:
         pt_a = (lat1, lon1)
         pt_b = (lat2, lon2)
 
-        clear, mast_height, ground_a, ground_b, snap_dist = los.is_clear(
+        clear, mast_height, ground_a, ground_b, snap_dist, _min_clr = los.is_clear(
             str(hill_dsm), pt_a, pt_b, freq_ghz=5.8, max_mast_height_m=0
         )
 
@@ -334,7 +334,7 @@ class TestIsClear:
         pt_a = (lat1, lon1)
         pt_b = (lat2, lon2)
 
-        clear, mast_height, ground_a, ground_b, snap_dist = los.is_clear(
+        clear, mast_height, ground_a, ground_b, snap_dist, _min_clr = los.is_clear(
             str(hill_dsm), pt_a, pt_b, freq_ghz=5.8, max_mast_height_m=200, step_m=10.0
         )
 
@@ -353,7 +353,7 @@ class TestIsClear:
             pt_a = (lat1, lon1)
             pt_b = (lat2, lon2)
 
-            clear, mast_height, ground_a, ground_b, snap_dist = los.is_clear(
+            clear, mast_height, ground_a, ground_b, snap_dist, _min_clr = los.is_clear(
                 ds, pt_a, pt_b, freq_ghz=5.8, max_mast_height_m=5, step_m=1.0
             )
 
@@ -371,13 +371,13 @@ class TestIsClear:
         pt_b = (lat2, lon2)
 
         # High altitude should clear the hill
-        clear, mast, gA, gB, snap = los.is_clear(
+        clear, mast, gA, gB, snap, _min_clr = los.is_clear(
             str(hill_dsm), pt_a, pt_b, from_alt=200.0, to_alt=200.0
         )
         assert clear is True
 
         # Ground level should be blocked
-        clear, mast, gA, gB, snap = los.is_clear(
+        clear, mast, gA, gB, snap, _min_clr = los.is_clear(
             str(hill_dsm), pt_a, pt_b, from_alt=0.0, to_alt=0.0
         )
         assert clear is False

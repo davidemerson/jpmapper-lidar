@@ -595,7 +595,7 @@ def is_clear(
     n_samples: int = 256,
     from_alt: Optional[float] = None,
     to_alt: Optional[float] = None,
-) -> Tuple[bool, int, float, float, float]:
+) -> Tuple[bool, int, float, float, float, float]:
     """Check if line of sight between two points is clear of obstructions.
 
     Args:
@@ -610,7 +610,7 @@ def is_clear(
         to_alt: Specific mast height at point B (m)
 
     Returns:
-        Tuple of (is_clear, mast_height, surface_a, surface_b, snap_distance)
+        Tuple of (is_clear, mast_height, surface_a, surface_b, snap_distance, min_clearance_m)
     """
     if isinstance(dsm, (str, Path)):
         with rasterio.open(dsm) as ds:
@@ -629,7 +629,7 @@ def _is_clear_points(
     n_samples: int = 256,
     from_alt: Optional[float] = None,
     to_alt: Optional[float] = None,
-) -> Tuple[bool, int, float, float, float]:
+) -> Tuple[bool, int, float, float, float, float]:
     """Internal implementation for the API is_clear function."""
     (lat_a, lon_a), ground_a, snap_a = _snap_to_valid(ds, point_a[1], point_a[0])
     (lat_b, lon_b), ground_b, snap_b = _snap_to_valid(ds, point_b[1], point_b[0])
@@ -644,9 +644,9 @@ def _is_clear_points(
         )
 
         if clear:
-            return True, 0, ground_a, ground_b, snap_distance
+            return True, 0, ground_a, ground_b, snap_distance, min_clr
         else:
-            return False, -1, ground_a, ground_b, snap_distance
+            return False, -1, ground_a, ground_b, snap_distance, min_clr
     else:
         clear, min_clr, fresnel_pct = _is_clear_with_dataset(
             lon_a, lat_a, 0,
@@ -655,7 +655,7 @@ def _is_clear_points(
         )
 
         if clear:
-            return True, 0, ground_a, ground_b, snap_distance
+            return True, 0, ground_a, ground_b, snap_distance, min_clr
 
         # Binary search for minimum mast height that clears
         lo, hi = 0.0, float(max_mast_height_m)
@@ -667,7 +667,7 @@ def _is_clear_points(
             ds, n_samples, 2.0, freq_ghz=freq_ghz
         )
         if not clear_max:
-            return False, -1, ground_a, ground_b, snap_distance
+            return False, -1, ground_a, ground_b, snap_distance, min_clr
 
         # Binary search: find minimum clearing height
         while hi - lo > step_m:
@@ -682,4 +682,10 @@ def _is_clear_points(
             else:
                 lo = mid
 
-        return True, int(math.ceil(hi)), ground_a, ground_b, snap_distance
+        # Get min_clearance at the final clearing height
+        _, final_min_clr, _ = _is_clear_with_dataset(
+            lon_a, lat_a, hi,
+            lon_b, lat_b, hi,
+            ds, n_samples, 2.0, freq_ghz=freq_ghz
+        )
+        return True, int(math.ceil(hi)), ground_a, ground_b, snap_distance, final_min_clr

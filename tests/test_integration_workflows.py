@@ -91,7 +91,7 @@ class TestWorkflows:
         mock_rasterio_open.return_value.__exit__ = MagicMock(return_value=False)
 
         # Setup mock for is_clear
-        mock_is_clear.return_value = (True, 0, 10, 15, 100)
+        mock_is_clear.return_value = (True, 0, 10, 15, 100, 5.0)
 
         # Call the API function
         result = analyze_los(

@@ -91,7 +91,7 @@ def rasterize_tile_with_metadata(
                 src_las,
                 dst_tif,
                 epsg=epsg,
-                resolution=resolution or 0.1,  # Default resolution if not provided
+                resolution=resolution if resolution is not None else 0.1,
                 use_metadata=True
             )
             
@@ -139,12 +139,12 @@ def rasterize_tile_with_metadata(
             src_las,
             dst_tif,
             epsg=epsg,
-            resolution=resolution or 0.1
+            resolution=resolution if resolution is not None else 0.1
         )
-        
+
         metadata_info['output_path'] = result_path
         metadata_info['used_epsg'] = epsg or 'auto-detected'
-        metadata_info['resolution'] = resolution or 0.1
+        metadata_info['resolution'] = resolution if resolution is not None else 0.1
         metadata_info['method'] = 'standard_rasterization'
         
         return result_path, metadata_info
@@ -269,11 +269,10 @@ def batch_rasterize_with_metadata(
     metadata_dir: Optional[Path] = None,
     auto_adjust_resolution: bool = True,
     quality_threshold: Optional[float] = None,
-    max_workers: Optional[int] = None
 ) -> List[Tuple[Path, Dict[str, Any]]]:
     """
     Batch rasterize multiple LAS files with metadata enhancement.
-    
+
     Args:
         las_files: List of LAS file paths to process
         output_dir: Directory where output GeoTIFFs will be written
@@ -283,8 +282,7 @@ def batch_rasterize_with_metadata(
         metadata_dir: Directory containing metadata files
         auto_adjust_resolution: Whether to optimize resolution per file
         quality_threshold: Quality threshold for processing
-        max_workers: Maximum number of parallel workers
-        
+
     Returns:
         List of (output_path, metadata_info) tuples
         

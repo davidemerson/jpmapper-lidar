@@ -36,18 +36,20 @@ def save_profile_png(
     title: str | None = None,
 ) -> None:
     """Render and save a cross-section profile to *out_png*."""
-    plt.figure(figsize=(8, 4))
-    plt.plot(dist_m, terrain_m, label="Terrain")
-    plt.plot(dist_m, terrain_m + fresnel_m * 0.6, "--", label="60% Fresnel")
-    plt.fill_between(dist_m, terrain_m, terrain_m + fresnel_m * 0.6, alpha=0.2)
-    plt.xlabel("Distance (m)")
-    plt.ylabel("Elevation (m)")
-    if title:
-        plt.title(title)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_png)
-    plt.close()
+    fig = plt.figure(figsize=(8, 4))
+    try:
+        plt.plot(dist_m, terrain_m, label="Terrain")
+        plt.plot(dist_m, terrain_m + fresnel_m * 0.6, "--", label="60% Fresnel")
+        plt.fill_between(dist_m, terrain_m, terrain_m + fresnel_m * 0.6, alpha=0.2)
+        plt.xlabel("Distance (m)")
+        plt.ylabel("Elevation (m)")
+        if title:
+            plt.title(title)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(out_png)
+    finally:
+        plt.close(fig)
 
 
 def render_analysis_map(
@@ -116,7 +118,7 @@ def render_analysis_map(
             
             # Create figure with larger size for better detail
             fig, ax = plt.subplots(figsize=(16, 12))
-            
+
             # Initialize plotting variables
             plot_crs = 'EPSG:4326'  # Default to WGS84
             tf_wgs84_to_plot = Transformer.from_crs(4326, 4326, always_xy=True)  # Identity transform
@@ -146,8 +148,7 @@ def render_analysis_map(
                         lon_buffer = buffer_km / (111.32 * np.cos(np.radians((min_lat + max_lat) / 2)))
                         
                         # Create polygon for the area
-                        from shapely.geometry import box
-                        bbox_poly = box(min_lon - lon_buffer, min_lat - lat_buffer, 
+                        bbox_poly = box(min_lon - lon_buffer, min_lat - lat_buffer,
                                        max_lon + lon_buffer, max_lat + lat_buffer)
                         
                         # Create GeoDataFrame and convert to Web Mercator
@@ -262,19 +263,21 @@ def render_analysis_map(
             ax.set_aspect('equal')
             
             # Tight layout and save
-            plt.tight_layout()
-            plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
-            plt.close()
-            
+            try:
+                plt.tight_layout()
+                plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+            finally:
+                plt.close(fig)
+
             logger.info(f"Enhanced analysis map saved to: {output_path}")
             return True
-            
+
     except ImportError as e:
         logger.warning(f"Missing required packages for enhanced map: {e}")
         # Fall back to simple map
-        return create_simple_analysis_map(analyzed_points, sample_points, output_path, title, 
+        return create_simple_analysis_map(analyzed_points, sample_points, output_path, title,
                                         sample_obstructions, sample_no_data)
-        
+
     except Exception as e:
         logger.error(f"Failed to render enhanced analysis map: {e}")
         # Fall back to simple map

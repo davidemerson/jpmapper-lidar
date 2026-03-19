@@ -42,7 +42,7 @@ def _get_optimal_analysis_workers(workers: Optional[int] = None) -> int:
     cpu_count = multiprocessing.cpu_count()
     
     # Use up to 90% of available CPUs for analysis
-    optimal_workers = max(1, int(cpu_count * 0.9))
+    optimal_workers = max(1, min(16, int(cpu_count * 0.9)))
     logger.info(f"Auto-detected {optimal_workers} workers for analysis (CPU cores: {cpu_count})")
     return optimal_workers
 
@@ -155,7 +155,6 @@ def _get_profile_details(dsm_path: Path, point_a: Tuple[float, float], point_b: 
             max_obstruction_height = 0.0
             
             # Calculate coordinates along the path for obstruction locations
-            from pyproj import Transformer
             tf_to_wgs84 = Transformer.from_crs(ds.crs, 4326, always_xy=True)
             tf_from_wgs84 = Transformer.from_crs(4326, ds.crs, always_xy=True)
 

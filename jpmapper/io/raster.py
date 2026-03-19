@@ -49,7 +49,7 @@ def _get_optimal_workers(workers: int | None = None) -> int:
         try:
             available_memory_gb = psutil.virtual_memory().available / (1024**3)
             memory_limited_workers = max(1, int(available_memory_gb / 5))
-            max_cpu_workers = max(1, min(8, int(cpu_count * 0.25)))
+            max_cpu_workers = max(1, min(8, cpu_count - 1))
             optimal_workers = min(max_cpu_workers, memory_limited_workers)
             log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count}, "
                     f"Available memory: {available_memory_gb:.1f}GB)")
@@ -57,7 +57,7 @@ def _get_optimal_workers(workers: int | None = None) -> int:
         except Exception:
             pass
 
-    optimal_workers = max(1, min(8, int(cpu_count * 0.25)))
+    optimal_workers = max(1, min(8, cpu_count - 1))
     log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count})")
     return optimal_workers
 
@@ -79,7 +79,7 @@ def _optimize_gdal_cache():
 
 # ─────────────────────────── PDAL helpers ───────────────────────────────────────
 def _pipeline_dict(src: Path, dst: Path, epsg: int, res: float) -> dict:
-    """Return PDAL pipeline dict that keeps **first returns** (max)."""
+    """Return PDAL pipeline dict: exclude noise points (class 7), take max Z per pixel."""
     return {
         "pipeline": [
             str(src),
@@ -173,7 +173,6 @@ def rasterize_tile(
     dst_tif: Path,
     epsg: int | None = None,
     resolution: float = 0.1,
-    workers: int | None = None,
 ) -> Path:
     """Rasterize a single LAS/LAZ file into a GeoTIFF DSM.
 
@@ -182,7 +181,6 @@ def rasterize_tile(
         dst_tif: Path where the output GeoTIFF will be written
         epsg: EPSG code for the output CRS. If None, auto-detects from LAS header.
         resolution: Cell size in meters (default: 0.1m)
-        workers: Number of worker processes (unused, for API compatibility)
 
     Returns:
         Path to the created GeoTIFF file
