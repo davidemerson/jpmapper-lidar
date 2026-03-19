@@ -226,6 +226,27 @@ def flat_dsm(tmp_path):
 
 
 @pytest.fixture
+def flat_dsm_meters(tmp_path):
+    """100x100 flat raster at 10m in EPSG:32618 (UTM zone 18N, metres)."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    dsm_path = tmp_path / "flat_dsm_m.tif"
+    height, width = 100, 100
+    west, south, east, north = 580000.0, 4510000.0, 581000.0, 4511000.0
+    transform = from_bounds(west, south, east, north, width, height)
+    data = np.full((1, height, width), 10.0, dtype=np.float32)
+    with rasterio.open(
+        dsm_path, "w", driver="GTiff",
+        height=height, width=width, count=1, dtype="float32",
+        crs="EPSG:32618", transform=transform, nodata=-9999,
+    ) as dst:
+        dst.write(data)
+    return dsm_path
+
+
+@pytest.fixture
 def hill_dsm(tmp_path):
     """Create a 100x100 raster with a gaussian hill for LOS blockage testing."""
     import numpy as np

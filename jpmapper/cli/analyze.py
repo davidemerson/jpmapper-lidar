@@ -51,24 +51,6 @@ app = typer.Typer(
 # ---------------------------------------------------------------------------#
 # Helpers
 # ---------------------------------------------------------------------------#
-def _convert_to_raster_units(value_m: float, units: str) -> float:
-    """Metres → native DSM linear unit (ftus or metre)."""
-    if units.lower() in {"metre", "meter", "m"}:
-        return value_m
-    if units.lower() in {"ftus", "us_survey_foot", "us-ft"}:
-        return value_m / 0.3048006096012192
-    raise ValueError(f"Unknown unit {units!r}")
-
-
-def _dsm_linear_unit(crs) -> str:  # CRS can be pyproj or rasterio CRS
-    unit = crs.axis_info[0].unit_name.lower()
-    if unit in {"metre", "meter", "m"}:
-        return "m"
-    if unit in {"us survey foot", "us_survey_foot", "us survey feet", "us-ft"}:
-        return "ftUS"
-    return unit
-
-
 @app.command(
     "csv",
     help=(

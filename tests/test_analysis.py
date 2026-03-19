@@ -104,8 +104,8 @@ class TestAnalysisWithRealRasters:
 
         assert is_clear_result is True
         assert mast_height >= 0
-        assert ground_a == pytest.approx(10.0, abs=1.0)
-        assert ground_b == pytest.approx(10.0, abs=1.0)
+        assert ground_a == pytest.approx(3.048, abs=0.5)
+        assert ground_b == pytest.approx(3.048, abs=0.5)
 
     def test_is_clear_with_blocked_path(self, hill_dsm):
         pt_a, pt_b = self._get_endpoints(hill_dsm, 980050, 980950)

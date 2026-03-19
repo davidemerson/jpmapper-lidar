@@ -9,6 +9,7 @@ A Python toolkit for LiDAR data processing and RF line-of-sight analysis. JPMapp
 - **Line-of-Sight Analysis** -- Check RF path clearance including 60% first Fresnel zone obstruction
 - **Mast Height Optimization** -- Iterative search finds minimum antenna height to clear obstructions
 - **Fresnel Zone Profiling** -- Terrain profiles with first Fresnel zone radius at each sample point
+- **Automatic Unit Normalization** -- DSM elevations and distances are converted to meters regardless of the CRS native unit (US survey feet, international feet, etc.)
 - **CLI & Python API** -- Full command-line interface and importable Python API
 - **Auto-Optimization** -- Memory-aware worker scaling via psutil
 
@@ -20,6 +21,10 @@ A Python toolkit for LiDAR data processing and RF line-of-sight analysis. JPMapp
 4. **Report** results including clearance/obstruction status, minimum mast height needed, surface elevations, and Fresnel zone obstruction percentage
 
 The LOS engine uses the DSM (first-return surface model, which includes buildings and vegetation) rather than a DTM (bare earth), so obstructions like rooftops and tree canopy are accounted for.
+
+### Unit Handling
+
+All elevations and distances returned by the analysis API are in **meters**, regardless of the DSM's native coordinate reference system. The LOS engine detects the CRS linear unit (e.g. US survey feet for EPSG:6539, meters for EPSG:32618) and applies the appropriate conversion factor automatically. Mast heights, alt buffers, and Fresnel radii are always specified in meters, so all arithmetic is unit-consistent.
 
 ## Installation
 
@@ -90,6 +95,14 @@ jpmapper analyze csv links.csv --las-dir data/ --json results.json --map map.png
 
 The CSV should contain columns: `point_a_lat`, `point_a_lon`, `point_b_lat`, `point_b_lon`, and optionally `point_a_mast`, `point_b_mast` (antenna heights in meters above ground), `frequency_ghz`.
 
+### Debug DSM sampling
+
+```bash
+# Inspect DSM values at specific projected coordinates
+jpmapper debug-dsm dsm.tif '980500,190500'
+jpmapper debug-dsm dsm.tif '980100,190500;980500,190500;980900,190500'
+```
+
 ## Python API
 
 ### Filtering
@@ -131,13 +144,29 @@ print(f"Clear: {result['clear']}")
 print(f"Mast needed: {result['mast_height_m']}m")
 print(f"Surface A: {result['surface_height_a_m']}m")
 print(f"Surface B: {result['surface_height_b_m']}m")
+print(f"Distance: {result['distance_m']:.1f}m")
+```
+
+Surface heights and distances are always returned in meters, even when the underlying DSM uses feet (e.g. EPSG:6539). The conversion is handled internally.
+
+You can also specify independent mast heights at each endpoint instead of using the iterative search:
+
+```python
+result = analyze_los(
+    Path("dsm.tif"),
+    point_a=(40.7128, -74.0060),
+    point_b=(40.7614, -73.9776),
+    freq_ghz=5.8,
+    mast_a_height_m=10,
+    mast_b_height_m=15,
+)
 ```
 
 The `is_clear` check verifies that:
 1. The geometric line-of-sight clears the terrain surface
 2. 60% of the first Fresnel zone is unobstructed at every sample point along the path
 
-If the path is blocked, the mast height search iterates upward at both endpoints until it finds the minimum height that achieves Fresnel clearance, or reports that the maximum height is insufficient.
+If the path is blocked and `max_mast_height_m` is provided, the mast height search iterates upward at both endpoints until it finds the minimum height that achieves Fresnel clearance, or reports that the maximum height is insufficient.
 
 ### Terrain Profile
 
@@ -157,6 +186,8 @@ distances, terrain, fresnel = generate_profile(
 
 ### Direct LOS Check
 
+For a simple boolean check without the full result dictionary:
+
 ```python
 from jpmapper.analysis.los import is_clear_direct
 
@@ -168,33 +199,44 @@ clear = is_clear_direct(
 )
 ```
 
+`from_alt` and `to_alt` are absolute altitudes in meters (ground elevation + antenna height).
+
 ## Architecture
 
 ```
 jpmapper/
-  io/              # File I/O layer
-    las.py         # LAS/LAZ header reading, bbox intersection filtering
-    raster.py      # PDAL rasterization, nodata gap-filling, tile merging, DSM caching
-  analysis/        # Core algorithms
-    los.py         # LOS geometry, Fresnel zone, terrain profiling, mast optimization
-    plots.py       # Matplotlib profile visualizations
-  api/             # Public API (validation + thin wrappers)
-    filter.py      # filter_by_bbox()
-    raster.py      # rasterize_tile()
-    analysis.py    # analyze_los(), generate_profile()
-  cli/             # Typer CLI commands
-    filter.py      # jpmapper filter bbox|shapefile
-    rasterize.py   # jpmapper rasterize tile
-    analyze.py     # jpmapper analyze csv
-  config.py        # Configuration loading
-  exceptions.py    # Exception hierarchy
+  io/                    # File I/O layer
+    las.py               # LAS/LAZ header reading, bbox intersection filtering
+    raster.py            # PDAL rasterization, nodata gap-filling, tile merging, DSM caching
+    metadata_raster.py   # Metadata-aware rasterization (geopandas)
+    pdal_utils.py        # PDAL pipeline construction
+  analysis/              # Core algorithms
+    los.py               # LOS geometry, Fresnel zone, terrain profiling, mast optimization, unit conversion
+    plots.py             # Matplotlib/Rich profile visualizations, analysis maps
+  api/                   # Public API (validation + thin wrappers)
+    filter.py            # filter_by_bbox()
+    raster.py            # rasterize_tile()
+    enhanced_raster.py   # rasterize_tile_with_metadata()
+    analysis.py          # analyze_los(), generate_profile()
+    shapefile_filter.py  # Shapefile-based spatial filtering
+  cli/                   # Typer CLI commands
+    main.py              # Root CLI app, sub-command registration, debug-dsm
+    filter.py            # jpmapper filter bbox|shapefile
+    rasterize.py         # jpmapper rasterize tile
+    analyze.py           # jpmapper analyze csv
+    analyze_utils.py     # CSV batch processing, parallel analysis, progress reporting
+  config.py              # Configuration loading (~/.jpmapper.json, env vars)
+  exceptions.py          # Exception hierarchy
+  logging.py             # Rich logging setup
 ```
 
 **Data flow**: LAS files → IO layer (filter/rasterize/gap-fill) → Analysis (LOS/Fresnel/profile) → API (validation) → CLI (user interface)
 
 ### Key algorithms
 
-**`_snap_to_valid()`** — Snaps a WGS84 coordinate to the nearest valid (non-nodata) DSM pixel within a 50-pixel search radius. Handles sparse LiDAR rasters where the query point may fall in a gap.
+**`_unit_factor()`** — Detects the CRS linear unit via pyproj and returns the conversion factor to meters. Supports metre, US survey foot, and international foot. Applied in `_snap_to_valid()`, `profile()`, and `_compute_profile_with_dataset()` so that all elevations and distances are normalized to meters before any LOS or Fresnel calculation.
+
+**`_snap_to_valid()`** — Snaps a WGS84 coordinate to the nearest valid (non-nodata) DSM pixel within a configurable search radius (default 50 pixels). Returns the surface elevation in meters after unit conversion. Handles sparse LiDAR rasters where the query point may fall in a gap.
 
 **`_is_clear_with_dataset()`** — Computes the LOS line between two points (ground elevation + antenna height), samples the terrain profile, then checks:
 - Geometric clearance: LOS line is above terrain at all sample points
@@ -224,13 +266,27 @@ JPMapperError
 
 ```bash
 pip install -e ".[dev]"
-pytest                              # Run all tests
-pytest tests/test_los_coverage.py   # LOS analysis tests
-pytest tests/test_raster_io.py      # Rasterization tests
-pytest tests/test_las_io.py         # LAS filtering tests
+pytest                                    # Run all tests (109+)
+pytest tests/test_los_coverage.py         # LOS analysis tests
+pytest tests/test_analysis.py             # Analysis integration tests
+pytest tests/test_raster_io.py            # Rasterization tests
+pytest tests/test_las_io.py               # LAS filtering tests
+pytest tests/test_api_comprehensive.py    # API validation tests
+pytest tests/test_cli.py                  # CLI command tests
+pytest tests/test_end_to_end.py           # End-to-end workflow tests
 ```
 
-Tests use real temporary GeoTIFF fixtures (`flat_dsm`, `hill_dsm`) with proper CRS and transforms for LOS/analysis testing. Integration tests that require `pdal` are skipped when it's not available.
+Tests use real temporary GeoTIFF fixtures with proper CRS and transforms:
+
+| Fixture | CRS | Description |
+|---------|-----|-------------|
+| `flat_dsm` | EPSG:6539 (US survey feet) | 100x100 flat raster at 10 ft elevation |
+| `flat_dsm_meters` | EPSG:32618 (UTM metres) | 100x100 flat raster at 10 m elevation |
+| `hill_dsm` | EPSG:6539 (US survey feet) | 100x100 raster with Gaussian hill (10-60 ft) |
+
+The feet-based fixtures verify that unit conversion works correctly — a 10 ft DSM value should produce ~3.048 m in API results. The metres fixture confirms no double-conversion occurs.
+
+Tests requiring optional dependencies (`pdal`, `geopandas`, `fiona`, `folium`, `psutil`) are automatically skipped when those packages are not installed.
 
 ## Dependencies
 
@@ -240,16 +296,16 @@ Tests use real temporary GeoTIFF fixtures (`flat_dsm`, `hill_dsm`) with proper C
 | rasterio | GeoTIFF I/O, nodata filling | Yes |
 | laspy | LAS/LAZ file reading | Yes |
 | shapely | Geometric operations (bbox intersection) | Yes |
-| pyproj | CRS transformations (WGS84 ↔ projected) | Yes |
-| rich | Terminal formatting | Yes |
+| pyproj | CRS transformations, unit detection | Yes |
+| rich | Terminal formatting, progress bars | Yes |
 | typer | CLI framework | Yes |
-| pandas | CSV analysis | Yes |
-| matplotlib | Profile plots | Yes |
+| pandas | CSV processing | Yes |
+| matplotlib | Profile plots, analysis maps | Yes |
 | pdal / python-pdal | Point cloud rasterization | For rasterize command |
 | psutil | Auto worker/memory optimization | Optional |
-| geopandas + fiona | Shapefile filtering | Optional |
-| folium | Interactive maps | Optional |
+| geopandas + fiona | Shapefile filtering, metadata-aware rasterization | Optional |
+| folium | Interactive HTML maps | Optional |
 
 ## License
 
-See [LICENSE](LICENSE).
+BSD 3-Clause. See [LICENSE](LICENSE).

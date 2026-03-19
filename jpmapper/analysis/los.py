@@ -29,6 +29,25 @@ from jpmapper.exceptions import AnalysisError, NoDataError
 # --------------------------------------------------------------------------- geometry helpers
 
 
+def _unit_factor(crs) -> float:
+    """Return multiplier to convert CRS linear units to metres."""
+    from pyproj import CRS as ProjCRS
+    try:
+        proj_crs = ProjCRS(crs) if not isinstance(crs, ProjCRS) else crs
+        unit = proj_crs.axis_info[0].unit_name.lower()
+    except (AttributeError, IndexError):
+        return 1.0
+    if unit in {"metre", "meter", "m"}:
+        return 1.0
+    if unit in {"us survey foot", "us_survey_foot", "foot_survey_us",
+                "us survey feet", "us-ft", "ftus"}:
+        return 0.3048006096012192
+    if unit in {"foot", "feet", "ft"}:
+        return 0.3048
+    logger.warning("Unknown CRS linear unit %r, assuming metres", unit)
+    return 1.0
+
+
 def _first_fresnel_radius(dist: np.ndarray, freq_ghz: float) -> np.ndarray:
     wavelength = 0.3 / freq_ghz  # lambda = c / f
     return np.sqrt(wavelength * dist / 2.0)
@@ -85,7 +104,8 @@ def _snap_to_valid(
             if elev_window.ndim == 3:
                 elev_window = elev_window[0]
 
-            elev = float(elev_window[0, 0])
+            uf = _unit_factor(ds.crs)
+            elev = float(elev_window[0, 0]) * uf
             dx = math.hypot(lon_valid - lon, lat_valid - lat) * 111_320  # ~ m per deg
             return (lat_valid, lon_valid), elev, dx
 
@@ -243,6 +263,7 @@ def profile(
     (lat_a, lon_a), gA, _ = _snap_to_valid(ds, pt_a[1], pt_a[0])
     (lat_b, lon_b), gB, _ = _snap_to_valid(ds, pt_b[1], pt_b[0])
 
+    uf = _unit_factor(ds.crs)
     tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
 
     x1, y1 = tf.transform(lon_a, lat_a)
@@ -290,7 +311,8 @@ def profile(
             ground[:] = 0.0
             logger.warning("Terrain profile has no valid data — using 0")
 
-    distance = np.linspace(0, math.hypot(x2 - x1, y2 - y1), n_samples)
+    ground *= uf
+    distance = np.linspace(0, math.hypot(x2 - x1, y2 - y1) * uf, n_samples)
     fresnel = _first_fresnel_radius(distance, freq_ghz)
 
     return distance, ground, fresnel
@@ -338,12 +360,13 @@ def _compute_profile_with_dataset(
     (lat_a, lon_a), gA, _ = _snap_to_valid(ds, point_a[1], point_a[0])
     (lat_b, lon_b), gB, _ = _snap_to_valid(ds, point_b[1], point_b[0])
 
+    uf = _unit_factor(ds.crs)
     tf = Transformer.from_crs(4326, ds.crs, always_xy=True)
 
     x1, y1 = tf.transform(lon_a, lat_a)
     x2, y2 = tf.transform(lon_b, lat_b)
 
-    total_distance = math.hypot(x2 - x1, y2 - y1)
+    total_distance = math.hypot(x2 - x1, y2 - y1) * uf
 
     xs = np.linspace(x1, x2, n_samples)
     ys = np.linspace(y1, y2, n_samples)
@@ -381,6 +404,7 @@ def _compute_profile_with_dataset(
             logger.warning("Profile has no valid elevation data — using 0m")
             elevations[:] = 0.0
 
+    elevations *= uf
     distances = np.linspace(0, total_distance, n_samples)
     return distances, elevations, total_distance
 

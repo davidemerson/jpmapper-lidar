@@ -90,8 +90,30 @@ class TestSnapToValid:
 
             (snap_lat, snap_lon), elev, dx = los._snap_to_valid(ds, lon, lat)
             assert isinstance(elev, float)
-            assert elev == pytest.approx(10.0, abs=1.0)
+            assert elev == pytest.approx(3.048, abs=0.5)
             assert dx >= 0
+
+    def test_feet_crs_returns_meters(self, flat_dsm):
+        """EPSG:6539 (feet) DSM returns elevation in meters."""
+        with rasterio.open(flat_dsm) as ds:
+            from pyproj import Transformer
+            tf = Transformer.from_crs(ds.crs, 4326, always_xy=True)
+            cx = (ds.bounds.left + ds.bounds.right) / 2
+            cy = (ds.bounds.bottom + ds.bounds.top) / 2
+            lon, lat = tf.transform(cx, cy)
+            (_, _), elev, _ = los._snap_to_valid(ds, lon, lat)
+            assert elev == pytest.approx(10.0 * 0.3048006096012192, rel=0.01)
+
+    def test_meter_crs_no_conversion(self, flat_dsm_meters):
+        """EPSG:32618 (metre) DSM returns elevation unchanged."""
+        with rasterio.open(flat_dsm_meters) as ds:
+            from pyproj import Transformer
+            tf = Transformer.from_crs(ds.crs, 4326, always_xy=True)
+            cx = (ds.bounds.left + ds.bounds.right) / 2
+            cy = (ds.bounds.bottom + ds.bounds.top) / 2
+            lon, lat = tf.transform(cx, cy)
+            (_, _), elev, _ = los._snap_to_valid(ds, lon, lat)
+            assert elev == pytest.approx(10.0, rel=0.01)
 
     def test_snap_to_valid_no_data(self, tmp_path):
         """Test that _snap_to_valid raises NoDataError when all nodata."""
@@ -279,8 +301,8 @@ class TestIsClear:
 
         assert clear is True
         assert mast_height >= 0
-        assert ground_a == pytest.approx(10.0, abs=1.0)
-        assert ground_b == pytest.approx(10.0, abs=1.0)
+        assert ground_a == pytest.approx(3.048, abs=0.5)
+        assert ground_b == pytest.approx(3.048, abs=0.5)
 
     def test_is_clear_blocked_by_hill(self, hill_dsm):
         """LOS across a hill at ground level should be blocked."""
