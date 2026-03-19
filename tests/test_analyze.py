@@ -32,7 +32,7 @@ def test_links_match_expected(dsm: Path):
             expected = row["expected_clear"].lower() == "true"
 
             try:
-                result, mast, gA, gB, snap_d = is_clear(dsm, a, b, freq_ghz=5.8)
+                result, mast, gA, gB, snap_d, min_clr = is_clear(dsm, a, b, freq_ghz=5.8)
             except NoDataError:
                 continue  # outside DSM coverage
 

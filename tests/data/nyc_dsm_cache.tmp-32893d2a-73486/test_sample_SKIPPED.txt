@@ -1,1 +1,0 @@
-Skipped due to error: Failed to rasterize /Users/david/Documents/GitHub/jpmapper-lidar/tests/data/las/test_sample.las: Command '['pdal', 'pipeline', '/var/folders/cf/zq5t6v_n4p33jjy57p1z46_c0000gn/T/tmpg7bp86bm.json']' returned non-zero exit status 1.

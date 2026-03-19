@@ -33,18 +33,21 @@ All elevations and distances returned by the analysis API are in **meters**, reg
 git clone https://github.com/davidemerson/jpmapper-lidar.git
 cd jpmapper-lidar
 
-# Install with conda (recommended — required for pdal)
+# Install with conda (recommended)
 conda create -n jpmapper python=3.11
 conda activate jpmapper
 conda install -c conda-forge pdal python-pdal
 pip install -e .
 
+# Or install with brew (macOS) + pip
+brew install pdal
+pip install -e .
+
 # Or install Python deps only (no rasterization without pdal)
-pip install numpy rasterio laspy shapely pyproj rich "typer[all]" pandas matplotlib
 pip install -e .
 
 # Verify
-python -c "from jpmapper.cli.main import app; app(['--help'])"
+jpmapper --help
 ```
 
 ### Optional dependencies
@@ -90,7 +93,7 @@ The rasterizer creates a first-return DSM (max Z per pixel) and automatically fi
 
 ```bash
 jpmapper analyze csv links.csv --las-dir data/ --epsg 6539
-jpmapper analyze csv links.csv --las-dir data/ --json results.json --map map.png
+jpmapper analyze csv links.csv --las-dir data/ --json-out results.json --map-png map.png
 ```
 
 The CSV should contain columns: `point_a_lat`, `point_a_lon`, `point_b_lat`, `point_b_lon`, and optionally `point_a_mast`, `point_b_mast` (antenna heights in meters above ground), `frequency_ghz`.
@@ -209,7 +212,6 @@ jpmapper/
     las.py               # LAS/LAZ header reading, bbox intersection filtering
     raster.py            # PDAL rasterization, nodata gap-filling, tile merging, DSM caching
     metadata_raster.py   # Metadata-aware rasterization (geopandas)
-    pdal_utils.py        # PDAL pipeline construction
   analysis/              # Core algorithms
     los.py               # LOS geometry, Fresnel zone, terrain profiling, mast optimization, unit conversion
     plots.py             # Matplotlib/Rich profile visualizations, analysis maps
@@ -321,7 +323,7 @@ The analysis is conservative by design: it checks pure geometric line-of-sight p
 
 ```bash
 pip install -e ".[dev]"
-pytest                                    # Run all tests (109+)
+pytest                                    # Run all tests (110+)
 pytest tests/test_los_coverage.py         # LOS analysis tests
 pytest tests/test_analysis.py             # Analysis integration tests
 pytest tests/test_raster_io.py            # Rasterization tests
@@ -355,8 +357,8 @@ Tests requiring optional dependencies (`pdal`, `geopandas`, `fiona`, `folium`, `
 | rich | Terminal formatting, progress bars | Yes |
 | typer | CLI framework | Yes |
 | pandas | CSV processing | Yes |
-| matplotlib | Profile plots, analysis maps | Yes |
-| pdal / python-pdal | Point cloud rasterization | For rasterize command |
+| pdal (CLI or python-pdal) | Point cloud rasterization | For rasterize/analyze commands |
+| matplotlib | Profile plots, analysis maps | Optional |
 | psutil | Auto worker/memory optimization | Optional |
 | geopandas + fiona | Shapefile filtering, metadata-aware rasterization | Optional |
 | folium | Interactive HTML maps | Optional |
