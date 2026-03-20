@@ -1,7 +1,10 @@
 """FastAPI application for JPMapper web interface."""
 from __future__ import annotations
 
+import asyncio
+import multiprocessing
 import os
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -27,12 +30,20 @@ async def lifespan(app: FastAPI):
         )
     dsm_dataset = rasterio.open(dsm_path)
     _routes._coverage_cache = None
-    # Pre-compute coverage grid so first request is fast
-    try:
-        _routes._compute_coverage(dsm_dataset)
-    except Exception:
-        pass  # Will be computed lazily on first request
+
+    # Size the default thread pool to the hardware so concurrent analysis
+    # requests can saturate available cores within this worker process.
+    cpu_count = multiprocessing.cpu_count()
+    n_workers = int(os.environ.get("JPMAPPER_WEB_WORKERS", "1"))
+    # Divide cores among uvicorn workers; each gets its own thread pool.
+    threads_per_worker = max(4, cpu_count // max(n_workers, 1))
+    loop = asyncio.get_event_loop()
+    pool = ThreadPoolExecutor(max_workers=threads_per_worker)
+    loop.set_default_executor(pool)
+
     yield
+
+    pool.shutdown(wait=False)
     if dsm_dataset is not None:
         dsm_dataset.close()
         dsm_dataset = None

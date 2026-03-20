@@ -12,7 +12,7 @@ A Python toolkit for LiDAR data processing and RF line-of-sight analysis. JPMapp
 - **Automatic Unit Normalization** -- DSM elevations and distances are converted to meters regardless of the CRS native unit (US survey feet, international feet, etc.)
 - **Web Interface** -- Interactive Leaflet map with point placement, terrain profile charting, and snap-to-DSM visualization
 - **CLI & Python API** -- Full command-line interface and importable Python API
-- **Auto-Optimization** -- Memory-aware worker scaling via psutil
+- **Auto-Optimization** -- Rasterization workers, GDAL cache, web server processes, and thread pools all auto-scale to available CPU cores and memory via psutil
 
 ## How It Works
 
@@ -45,10 +45,10 @@ All elevations and distances returned by the analysis API are in **meters**, reg
 git clone https://github.com/davidemerson/jpmapper-lidar.git
 cd jpmapper-lidar
 
-# Install with conda (recommended)
+# Install with conda (recommended for all platforms)
 conda create -n jpmapper python=3.11
 conda activate jpmapper
-conda install -c conda-forge pdal python-pdal
+conda install -c conda-forge pdal python-pdal rasterio laspy pyproj shapely pandas psutil matplotlib
 pip install -e .
 
 # Or install with brew (macOS) + pip
@@ -62,14 +62,27 @@ pip install -e .
 jpmapper --help
 ```
 
+### Windows notes
+
+On Windows with conda, you may need to set GDAL/PROJ data paths if you see `Cannot find gdalvrt.xsd` warnings:
+
+```bash
+set GDAL_DATA=%CONDA_PREFIX%\Library\share\gdal
+set PROJ_DATA=%CONDA_PREFIX%\Library\share\proj
+```
+
+Or in bash (Git Bash / MSYS2):
+
+```bash
+export GDAL_DATA="$CONDA_PREFIX/Library/share/gdal"
+export PROJ_DATA="$CONDA_PREFIX/Library/share/proj"
+```
+
 ### Optional dependencies
 
 ```bash
 # Shapefile-based filtering
 conda install -c conda-forge geopandas fiona
-
-# Performance optimization (auto worker/memory scaling)
-pip install psutil
 
 # Interactive maps
 pip install folium
@@ -92,6 +105,7 @@ Options:
 - `--dsm` (required) -- Path to the DSM GeoTIFF file
 - `--host` -- Bind address (default: `127.0.0.1`)
 - `--port` -- Port number (default: `8000`)
+- `--workers` -- Number of uvicorn worker processes (default: `0` = auto-detect). Auto-detection uses `min(cpu_count / 2, 8)` so the server scales with hardware. Each worker opens its own DSM file handle and gets a thread pool sized to the available cores for concurrent analysis requests.
 
 Open `http://127.0.0.1:8000` in a browser after startup.
 
@@ -343,35 +357,77 @@ JPMapper includes test data derived from the [NYC Mesh](https://www.nycmesh.net/
 - **Node locations**: Pulled from the meshdb public API at `https://db.nycmesh.net/api/v1/mapdata/nodes/` and `https://db.nycmesh.net/api/v1/mapdata/links/`
 - **Test CSV**: `tests/data/meshdb_points.csv` contains real node-to-node wireless links with coordinates and computed mast heights
 
-### Preparing LAS Data
+### End-to-end quickstart
 
-The LAS files are not included in the repository (gitignored due to size). To set up local test data:
+This walks through the full cycle: obtain LAS data, build a merged DSM, and launch the web UI.
 
-1. Obtain NYC 2021 LiDAR tiles covering the Brooklyn/Manhattan area (x=982500-1012500, y=175000-210000 in EPSG:6539)
-2. Place `.las` files in `NYC_2021/las/`
-3. Run the analysis to rasterize and test:
+**1. Obtain LAS files**
+
+The LAS files are not included in the repository (gitignored due to size). For NYC, obtain the 2021 Topobathymetric LiDAR tiles covering your area of interest. Place `.las` files in a directory (e.g. `NYC_2021/`).
+
+**2. Build a merged DSM**
+
+There is no single CLI command for batch rasterization + merging (the `jpmapper rasterize tile` command handles one file at a time). Use the Python API:
 
 ```python
 from pathlib import Path
+from jpmapper.io.raster import cached_mosaic
+
+# Build a merged DSM from all LAS tiles
+# - Workers, GDAL cache, and memory are auto-detected from hardware
+# - On a 48-core/128GB box this used 47 workers; on a 4-core laptop it uses 3
+# - The VRT-based merge streams to disk in constant memory
+dsm = cached_mosaic(
+    Path("NYC_2021"),
+    Path("NYC_2021/nyc_dsm_0.5m.tif"),
+    epsg=6539,
+    resolution=0.5,
+)
+```
+
+Or as a one-liner from the shell:
+
+```bash
+python -c "from pathlib import Path; from jpmapper.io.raster import cached_mosaic; cached_mosaic(Path('NYC_2021'), Path('NYC_2021/nyc_dsm_0.5m.tif'), epsg=6539, resolution=0.5)"
+```
+
+This will skip rasterization if the output file already exists. Pass `force=True` to rebuild.
+
+**3. Launch the web server**
+
+```bash
+jpmapper web --dsm NYC_2021/nyc_dsm_0.5m.tif
+```
+
+Open `http://127.0.0.1:8000` in a browser. The server auto-scales worker processes and thread pools to the hardware (see `--workers` option above).
+
+**4. (Optional) Batch analysis from CSV**
+
+```python
 from jpmapper.cli.analyze_utils import analyze_csv_file
 
 results = analyze_csv_file(
     csv_path=Path("tests/data/meshdb_points.csv"),
-    las_dir=Path("NYC_2021/las/"),
-    cache=Path("NYC_2021/dsm_cache.tif"),
+    las_dir=Path("NYC_2021"),
+    cache=Path("NYC_2021/nyc_dsm_0.5m.tif"),
     epsg=6539,
-    resolution=1.0,
-    workers=4,
+    resolution=0.5,
+    workers=None,  # auto-detect based on CPU/memory
     output_format="json",
     output_path=Path("NYC_2021/meshdb_results.json"),
 )
 ```
 
-Or use the web UI to explore the same DSM interactively:
+### Performance expectations
 
-```bash
-jpmapper web --dsm NYC_2021/dsm_cache.tif
-```
+Rasterization and merge times scale with the number of LAS tiles and the hardware:
+
+| Hardware | 612 tiles (0.5m res) | DSM merge |
+|----------|---------------------|-----------|
+| 48-core / 128GB | ~56 min (47 workers) | ~31 min |
+| 8-core / 16GB | ~6 hrs (7 workers) | ~31 min |
+
+The merge step uses GDAL VRT streaming so memory stays bounded regardless of output size (the NYC DSM is 30 GB, 227k x 110k pixels).
 
 ### Computing Mast Heights from meshdb
 
@@ -398,7 +454,7 @@ The analysis is conservative by design: it checks pure geometric line-of-sight p
 
 ```bash
 pip install -e ".[dev]"
-pytest                                    # Run all tests (141)
+pytest                                    # Run all tests (142)
 pytest tests/test_los_coverage.py         # LOS analysis tests
 pytest tests/test_analysis.py             # Analysis integration tests
 pytest tests/test_raster_io.py            # Rasterization tests
@@ -435,9 +491,9 @@ Tests requiring optional dependencies (`pdal`, `geopandas`, `fiona`, `folium`, `
 | pandas | CSV processing | Yes |
 | fastapi | Web interface API | Yes |
 | uvicorn | ASGI web server | Yes |
+| psutil | Auto worker/memory optimization | Yes |
 | pdal (CLI or python-pdal) | Point cloud rasterization | For rasterize/analyze commands |
 | matplotlib | Profile plots, analysis maps | Optional |
-| psutil | Auto worker/memory optimization | Optional |
 | geopandas + fiona | Shapefile filtering, enhanced map rendering | Optional |
 | contextily | OpenStreetMap base layers in map plots | Optional |
 | folium | Interactive HTML maps | Optional |

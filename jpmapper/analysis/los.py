@@ -75,6 +75,11 @@ def _snap_to_valid(
 
     x, y = tf_wgs84_to_dsm.transform(lon, lat)
 
+    if not (np.isfinite(x) and np.isfinite(y)):
+        raise NoDataError(
+            f"Coordinate ({lat:.6f}, {lon:.6f}) could not be projected to DSM CRS"
+        )
+
     col = int(round((x - ds.transform.c) / ds.transform.a))
     row = int(round((y - ds.transform.f) / ds.transform.e))
 

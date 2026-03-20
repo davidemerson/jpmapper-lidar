@@ -13,10 +13,11 @@ from jpmapper.io import raster as r
 def dsm() -> Path:
     las_dir = Path(__file__).parent / "data" / "las"
     cache = Path(__file__).parent / "data" / "nyc_dsm_cache.tif"
-    if not any(las_dir.glob("*.las")):
-        pytest.skip("no LAS fixtures")
+    if not any(f for f in las_dir.glob("*.las") if f.stat().st_size > 0):
+        pytest.skip("no valid LAS fixtures")
     try:
-        return r.cached_mosaic(las_dir, cache, epsg=6539, resolution=0.1, workers=None)
+        # Use workers=1 to avoid ProcessPoolExecutor + PDAL crash on Windows
+        return r.cached_mosaic(las_dir, cache, epsg=6539, resolution=0.1, workers=1)
     except Exception as e:
         pytest.skip(f"Could not create DSM (pdal not available?): {e}")
 

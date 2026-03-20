@@ -15,7 +15,6 @@ from typing import Sequence, Tuple
 import numpy as np
 import laspy
 import rasterio
-from rasterio.merge import merge as rio_merge
 from rasterio.fill import fillnodata as rio_fillnodata
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
@@ -38,7 +37,12 @@ log = logging.getLogger(__name__)
 
 
 def _get_optimal_workers(workers: int | None = None) -> int:
-    """Get optimal number of workers based on available CPU cores and memory."""
+    """Get optimal number of workers based on available CPU cores and memory.
+
+    Scales with the hardware: on many-core machines the cap rises with CPU
+    count (up to ``cpu_count - 1``), subject to a 2 GB-per-worker memory
+    budget so we don't exhaust RAM on memory-constrained hosts.
+    """
     if workers is not None:
         cpu_count = multiprocessing.cpu_count()
         return max(1, min(workers, cpu_count * 2))
@@ -48,8 +52,8 @@ def _get_optimal_workers(workers: int | None = None) -> int:
     if HAS_PSUTIL:
         try:
             available_memory_gb = psutil.virtual_memory().available / (1024**3)
-            memory_limited_workers = max(1, int(available_memory_gb / 5))
-            max_cpu_workers = max(1, min(8, cpu_count - 1))
+            memory_limited_workers = max(1, int(available_memory_gb / 2))
+            max_cpu_workers = max(1, cpu_count - 1)
             optimal_workers = min(max_cpu_workers, memory_limited_workers)
             log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count}, "
                     f"Available memory: {available_memory_gb:.1f}GB)")
@@ -57,7 +61,7 @@ def _get_optimal_workers(workers: int | None = None) -> int:
         except Exception as e:
             log.debug("psutil worker detection failed: %s", e)
 
-    optimal_workers = max(1, min(8, cpu_count - 1))
+    optimal_workers = max(1, min(cpu_count - 1, 8))
     log.info(f"Auto-detected {optimal_workers} workers (CPU cores: {cpu_count})")
     return optimal_workers
 
@@ -324,6 +328,11 @@ def rasterize_dir_parallel(
 
 # ---------- merge & cache unchanged -------------------------------------------
 def merge_tiles(tifs: Sequence[Path], dst: Path) -> None:
+    """Merge rasterized tiles into a single GeoTIFF using GDAL VRT.
+
+    Uses a two-pass approach (VRT -> GeoTIFF) that streams data in chunks,
+    so memory usage stays bounded regardless of the total output size.
+    """
     if not tifs:
         raise ValueError("merge_tiles() received 0 rasters")
 
@@ -345,30 +354,44 @@ def merge_tiles(tifs: Sequence[Path], dst: Path) -> None:
 
         merge_task = progress.add_task(f"[magenta]Merging {len(tifs)} tiles into DSM", total=100)
 
-        with rasterio.Env():
-            progress.update(merge_task, completed=10, description="[magenta]Opening raster files")
-            srcs = [rasterio.open(str(t)) for t in tifs]
-            try:
-                progress.update(merge_task, completed=30, description="[magenta]Computing mosaic")
-                mosaic, transform = rio_merge(srcs, mem_limit=512, nodata=-9999)
+        # Build a GDAL VRT (virtual raster) — zero-copy, just metadata
+        from osgeo import gdal
+        gdal.UseExceptions()
 
-                progress.update(merge_task, completed=70, description="[magenta]Writing merged DSM")
-                meta = srcs[0].meta.copy()
-                meta.update(
-                    count=mosaic.shape[0],
-                    height=mosaic.shape[1],
-                    width=mosaic.shape[2],
-                    transform=transform,
-                    nodata=-9999
-                )
+        vrt_path = str(dst.with_suffix(".vrt"))
+        tif_paths = [str(t) for t in tifs]
 
-                with rasterio.open(dst, "w", **meta) as ds:
-                    ds.write(mosaic)
+        progress.update(merge_task, completed=10, description="[magenta]Building VRT index")
+        vrt_ds = gdal.BuildVRT(vrt_path, tif_paths, resolution="highest", srcNodata=-9999, VRTNodata=-9999)
+        vrt_ds.FlushCache()
+        vrt_ds = None  # close
 
-                progress.update(merge_task, completed=100, description="[magenta]DSM merge complete")
-            finally:
-                for src in srcs:
-                    src.close()
+        progress.update(merge_task, completed=30, description="[magenta]Translating VRT to GeoTIFF (streaming)")
+        # Translate VRT -> compressed GeoTIFF in constant memory
+        gdal.Translate(
+            str(dst),
+            vrt_path,
+            format="GTiff",
+            outputType=gdal.GDT_Float32,
+            creationOptions=[
+                "TILED=YES",
+                "COMPRESS=LZW",
+                "PREDICTOR=2",
+                "BIGTIFF=YES",
+            ],
+            callback=lambda pct, msg, data: progress.update(
+                merge_task, completed=int(30 + pct * 70),
+                description=f"[magenta]Writing GeoTIFF ({pct*100:.0f}%)"
+            ),
+        )
+
+        progress.update(merge_task, completed=100, description="[magenta]DSM merge complete")
+
+        # Clean up VRT
+        try:
+            Path(vrt_path).unlink()
+        except OSError:
+            pass
 
     console.print(f"[green]Merged {len(tifs)} tiles -> {dst.name}[/green]")
     log.debug("Merged %d tiles -> %s", len(tifs), dst)

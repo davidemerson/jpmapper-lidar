@@ -40,12 +40,14 @@ class TestPerformanceOptimizations:
     @psutil_available
     @patch('psutil.virtual_memory')
     def test_get_optimal_workers_memory_abundant(self, mock_memory):
-        """Test worker count with abundant memory."""
+        """Test worker count scales with CPU cores when memory is abundant."""
         mock_memory.return_value.available = 32 * 1024**3  # 32GB
         workers = _get_optimal_workers(None)
         cpu_count = multiprocessing.cpu_count()
-        expected_max = max(1, min(8, cpu_count - 1))
-        assert workers <= expected_max
+        # With 32GB at 2GB/worker budget, memory allows up to 16 workers
+        assert workers <= max(1, cpu_count - 1)
+        assert workers <= 16
+        assert workers >= 1
 
     @patch('jpmapper.io.raster.HAS_PSUTIL', False)
     def test_get_optimal_workers_fallback_no_psutil(self):

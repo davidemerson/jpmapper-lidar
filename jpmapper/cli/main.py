@@ -62,13 +62,37 @@ def web(
     dsm: str = typer.Option(..., help="Path to DSM GeoTIFF file"),
     host: str = typer.Option("127.0.0.1", help="Bind address"),
     port: int = typer.Option(8000, help="Port number"),
+    workers: int = typer.Option(
+        0, help="Number of uvicorn worker processes (0 = auto-detect based on CPU cores)"
+    ),
 ) -> None:
     """Launch the web-based LOS analysis interface."""
+    import multiprocessing
     import os
+
     os.environ["JPMAPPER_DSM_PATH"] = dsm
+
+    if workers <= 0:
+        cpu_count = multiprocessing.cpu_count()
+        # For I/O-heavy web serving with CPU-bound analysis, use a moderate
+        # fraction of cores.  Each worker opens its own DSM file handle so
+        # memory scales linearly — cap at min(cores/2, 8) by default.
+        workers = max(1, min(cpu_count // 2, 8))
+
+    os.environ["JPMAPPER_WEB_WORKERS"] = str(workers)
+    logger.info(
+        "Starting web server at http://%s:%d with %d worker(s)", host, port, workers
+    )
+
     import uvicorn
-    logger.info("Starting web server at http://%s:%d", host, port)
-    uvicorn.run("jpmapper.web.app:app", host=host, port=port, log_level="info")
+
+    uvicorn.run(
+        "jpmapper.web.app:app",
+        host=host,
+        port=port,
+        workers=workers,
+        log_level="info",
+    )
 
 @app.command()
 def debug_dsm(

@@ -29,13 +29,13 @@ class TestEndToEndWorkflow:
     @pytest.fixture
     def las_files(self, test_data_dir):
         """
-        Fixture that returns a list of LAS files for testing.
-        Tests will be skipped if no LAS files are found.
+        Fixture that returns a list of non-empty LAS files for testing.
+        Tests will be skipped if no valid LAS files are found.
         """
         las_dir = test_data_dir / "las"
-        las_files = list(las_dir.glob("*.las"))
+        las_files = [f for f in las_dir.glob("*.las") if f.stat().st_size > 0]
         if not las_files:
-            pytest.skip("No LAS test files found")
+            pytest.skip("No valid (non-empty) LAS test files found")
         return las_files
     
     def test_full_workflow(self, las_files):
@@ -92,18 +92,27 @@ class TestEndToEndWorkflow:
             assert dsm_path.stat().st_size > 0, "DSM file is empty"
             
             # Step 3: Analyze a line-of-sight
-            # Get coordinates that are likely to be within the DSM
+            # Convert projected coordinates from the LAS header to WGS84 lat/lon
+            import rasterio
+            from pyproj import Transformer
+
+            with rasterio.open(dsm_path) as ds:
+                dsm_crs = ds.crs
+
+            transformer = Transformer.from_crs(dsm_crs, "EPSG:4326", always_xy=True)
+
             from laspy import open as las_open
             with las_open(src_las) as f:
                 header = f.header
-                # Create two points within the bounds of the file
                 midx = (header.mins[0] + header.maxs[0]) / 2
                 midy = (header.mins[1] + header.maxs[1]) / 2
-                
-                # Convert to lat/lon if needed (simplified for test)
-                point_a = (midy - 0.001, midx - 0.001)  # lat, lon
-                point_b = (midy + 0.001, midx + 0.001)  # lat, lon
-            
+                # Offset slightly in projected coords (100 ft ~ 30m)
+                offset = 100.0
+                lon_a, lat_a = transformer.transform(midx - offset, midy - offset)
+                lon_b, lat_b = transformer.transform(midx + offset, midy + offset)
+                point_a = (lat_a, lon_a)  # lat, lon
+                point_b = (lat_b, lon_b)  # lat, lon
+
             # Analyze line-of-sight
             try:
                 result = analyze_los(
@@ -112,7 +121,7 @@ class TestEndToEndWorkflow:
                     point_b,
                     freq_ghz=5.8
                 )
-                
+
                 # Assert that the result contains the expected fields
                 assert "clear" in result
                 assert "mast_a_height_m" in result
@@ -120,18 +129,16 @@ class TestEndToEndWorkflow:
                 assert "surface_height_a_m" in result
                 assert "surface_height_b_m" in result
                 assert "distance_m" in result
-                
+
                 # The result may be clear or blocked, but either is valid
                 # Just check that the type is boolean
                 assert isinstance(result["clear"], bool)
-                
+
             except JPMapperError as e:
                 # If the points are outside the DSM, the test may legitimately fail
-                # We'll allow this exception
-                if "outside the DSM" in str(e):
+                if "outside" in str(e).lower() or "no valid dsm data" in str(e).lower():
                     pytest.skip(f"Test points are outside the DSM: {e}")
                 else:
-                    # Other errors should be raised
                     raise
     
     def test_workflow_with_csv(self, test_data_dir, las_files):
@@ -199,8 +206,8 @@ class TestEndToEndWorkflow:
                         })
                         
                     except JPMapperError as e:
-                        # If the points are outside the DSM, skip this row
-                        if "outside the DSM" in str(e):
+                        # If the points are outside the DSM or valid area, skip this row
+                        if "outside" in str(e).lower() or "no valid dsm data" in str(e).lower():
                             continue
                         else:
                             # Other errors should be raised
