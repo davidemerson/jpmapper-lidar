@@ -67,14 +67,18 @@ def _get_optimal_workers(workers: int | None = None) -> int:
 
 
 def _optimize_gdal_cache():
-    """Set optimal GDAL cache size based on available memory."""
+    """Set optimal GDAL cache size and threading based on available resources."""
+    cpu_count = multiprocessing.cpu_count()
+    # Let GDAL use multiple threads for compression/decompression
+    os.environ.setdefault("GDAL_NUM_THREADS", str(max(2, cpu_count // 2)))
+
     if HAS_PSUTIL:
         try:
             available_memory_mb = psutil.virtual_memory().available / (1024**2)
             gdal_cache_mb = min(int(available_memory_mb * 0.25), 4096)
             gdal_cache_mb = max(512, gdal_cache_mb)
             os.environ["GDAL_CACHEMAX"] = str(gdal_cache_mb)
-            log.info(f"Set GDAL cache to {gdal_cache_mb}MB")
+            log.info(f"Set GDAL cache to {gdal_cache_mb}MB, threads={os.environ['GDAL_NUM_THREADS']}")
             return
         except Exception:
             pass
@@ -376,8 +380,9 @@ def merge_tiles(tifs: Sequence[Path], dst: Path) -> None:
             creationOptions=[
                 "TILED=YES",
                 "COMPRESS=LZW",
-                "PREDICTOR=2",
+                "PREDICTOR=3",
                 "BIGTIFF=YES",
+                f"NUM_THREADS={os.environ.get('GDAL_NUM_THREADS', 'ALL_CPUS')}",
             ],
             callback=lambda pct, msg, data: progress.update(
                 merge_task, completed=int(30 + pct * 70),
@@ -406,6 +411,8 @@ def cached_mosaic(
     workers: int | None = None,
     force: bool = False,
 ) -> Path:
+    import shutil
+
     console = Console()
 
     if not force and cache_path.exists():
@@ -424,8 +431,6 @@ def cached_mosaic(
     tmp_dir = cache_path.with_suffix(f".tmp-{sig}-{os.getpid()}")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    optimal_workers = _get_optimal_workers(workers)
-
     las_files = list(las_dir.glob("*.las"))
     if not las_files:
         raise FileNotFoundError(f"No .las in {las_dir}")
@@ -433,13 +438,28 @@ def cached_mosaic(
     console.print(f"[cyan]Found {len(las_files)} LAS files to process[/cyan]")
 
     tifs = rasterize_dir_parallel(
-        las_dir, tmp_dir, epsg=epsg, resolution=resolution, workers=optimal_workers
+        las_dir, tmp_dir, epsg=epsg, resolution=resolution, workers=workers
     )
 
     if tifs:
         merge_tiles(tifs, cache_path)
     else:
         raise RasterizationError("No tiles were successfully rasterized")
+
+    # Clean up temporary tile directory.  On Windows, child-process file
+    # handles may linger briefly after ProcessPoolExecutor shuts down, so
+    # retry once after a short sleep if the first attempt fails.
+    import time as _time
+    for attempt in range(2):
+        try:
+            shutil.rmtree(tmp_dir)
+            console.print(f"[dim]Cleaned up temp tiles: {tmp_dir.name}[/dim]")
+            break
+        except OSError:
+            if attempt == 0:
+                _time.sleep(2)
+            else:
+                console.print(f"[yellow]Could not auto-remove {tmp_dir.name} — delete manually to reclaim space[/yellow]")
 
     console.print(f"[bold green]DSM creation complete: {cache_path.name}[/bold green]")
     return cache_path

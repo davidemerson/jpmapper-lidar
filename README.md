@@ -48,7 +48,7 @@ cd jpmapper-lidar
 # Install with conda (recommended for all platforms)
 conda create -n jpmapper python=3.11
 conda activate jpmapper
-conda install -c conda-forge pdal python-pdal rasterio laspy pyproj shapely pandas psutil matplotlib
+conda install -c conda-forge pdal python-pdal gdal rasterio laspy pyproj shapely pandas psutil matplotlib
 pip install -e .
 
 # Or install with brew (macOS) + pip
@@ -133,6 +133,7 @@ The web server exposes a JSON API:
 |----------|--------|-------------|
 | `/api/health` | GET | Server status and DSM load state |
 | `/api/bounds` | GET | DSM geographic bounds in WGS84 |
+| `/api/coverage` | GET | DSM coverage grid (gaps shown on map) |
 | `/api/analyze` | POST | Run LOS analysis between two points |
 
 ## CLI Usage
@@ -422,12 +423,12 @@ results = analyze_csv_file(
 
 Rasterization and merge times scale with the number of LAS tiles and the hardware:
 
-| Hardware | 612 tiles (0.5m res) | DSM merge |
-|----------|---------------------|-----------|
-| 48-core / 128GB | ~56 min (47 workers) | ~31 min |
-| 8-core / 16GB | ~6 hrs (7 workers) | ~31 min |
+| Hardware | Rasterize 612 tiles (0.5m) | Merge to GeoTIFF | Total |
+|----------|---------------------------|-------------------|-------|
+| 48-core / 128GB | ~19 min (47 workers) | ~8 min | **~27 min** |
+| 8-core / 16GB | ~3.5 hrs (7 workers) | ~30 min | **~4 hrs** |
 
-The merge step uses GDAL VRT streaming so memory stays bounded regardless of output size (the NYC DSM is 30 GB, 227k x 110k pixels).
+The merge step uses GDAL VRT streaming with multi-threaded LZW compression (`GDAL_NUM_THREADS`), so memory stays bounded regardless of output size. The NYC DSM is ~34 GB (227k x 110k pixels, Float32).
 
 ### Computing Mast Heights from meshdb
 
