@@ -211,6 +211,10 @@ def _is_clear_with_dataset(
         n_samples=n_samples,
     )
 
+    if total_distance == 0:
+        # Same point — trivially clear
+        return True, 0.0, 100.0
+
     x = distances / total_distance  # normalized distance 0..1
     los_y = (1 - x) * from_alt_adjusted + x * to_alt_adjusted
 
