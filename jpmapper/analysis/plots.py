@@ -14,11 +14,16 @@ try:
     import rasterio.plot
     from rasterio.transform import from_bounds
     from shapely.geometry import Point, LineString, box
-    import geopandas as gpd
     HAS_GIS_LIBS = True
 except ImportError:
     HAS_GIS_LIBS = False
-    logger.warning("GIS libraries not available for map rendering (rasterio, geopandas, shapely)")
+    logger.warning("GIS libraries not available for map rendering (rasterio, shapely)")
+
+try:
+    import geopandas as gpd
+    HAS_GEOPANDAS = True
+except ImportError:
+    HAS_GEOPANDAS = False
 
 try:
     import contextily as ctx
@@ -77,7 +82,7 @@ def render_analysis_map(
     Returns:
         True if map was successfully created, False otherwise
     """
-    if not HAS_GIS_LIBS:
+    if not HAS_GIS_LIBS or not HAS_GEOPANDAS:
         logger.warning("Cannot render map: missing required libraries (rasterio, geopandas, shapely)")
         return False
         

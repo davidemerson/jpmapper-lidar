@@ -16,6 +16,15 @@
         Click on the map to place <strong>Point A</strong> (blue), then <strong>Point B</strong> (red). Drag markers to adjust.
       </div>
 
+      <label class="toggle-row">
+        <input type="checkbox" id="show-coverage" checked>
+        <span class="toggle-label">Show coverage gaps</span>
+        <span class="legend-swatch legend-nodata"></span>
+        <span class="legend-text">No data</span>
+        <span class="legend-swatch legend-partial"></span>
+        <span class="legend-text">Partial</span>
+      </label>
+
       <h3>Point A</h3>
       <div class="form-row">
         <div class="form-group">
@@ -72,6 +81,7 @@
 
       <div class="results hidden" id="results">
         <div id="status-badge"></div>
+        <div class="snap-notice hidden" id="snap-notice"></div>
         <div class="stat-grid">
           <div class="stat"><div class="stat-label">Distance</div><div class="stat-value" id="r-distance">—</div></div>
           <div class="stat"><div class="stat-label">Min Clearance</div><div class="stat-value" id="r-clearance">—</div></div>

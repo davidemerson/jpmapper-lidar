@@ -26,6 +26,14 @@ class AnalyzeRequest(BaseModel):
         return v
 
 
+class SnapInfo(BaseModel):
+    original_lat: float
+    original_lon: float
+    snapped_lat: float
+    snapped_lon: float
+    snap_distance_m: float
+
+
 class Obstruction(BaseModel):
     distance_along_path_m: float
     lat: float
@@ -50,6 +58,21 @@ class AnalyzeResponse(BaseModel):
     clearance_min_m: float
     profile: ProfileData
     obstructions: List[Obstruction]
+    snap_a: Optional[SnapInfo] = None
+    snap_b: Optional[SnapInfo] = None
+
+
+class CoverageCell(BaseModel):
+    min_lat: float
+    min_lon: float
+    max_lat: float
+    max_lon: float
+    coverage_pct: float
+
+
+class CoverageResponse(BaseModel):
+    cell_size_px: int
+    cells: List[CoverageCell]
 
 
 class HealthResponse(BaseModel):

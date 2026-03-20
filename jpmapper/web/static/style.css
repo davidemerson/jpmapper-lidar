@@ -144,6 +144,41 @@ button {
   line-height: 1.5;
 }
 
+.snap-notice {
+  background: #fff3cd;
+  color: #856404;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.snap-notice.hidden { display: none; }
+.snap-notice strong { font-weight: 600; }
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: #555;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.toggle-row input[type="checkbox"] { margin: 0; }
+.toggle-label { flex: 0 0 auto; }
+
+.legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  margin-left: 6px;
+  border: 1px solid rgba(0,0,0,0.15);
+}
+.legend-nodata { background: rgba(220,53,69,0.45); }
+.legend-partial { background: rgba(220,53,69,0.2); }
+.legend-text { font-size: 0.7rem; color: #888; }
+
 .dsm-bounds-label {
   font-size: 0.7rem;
   color: #888;

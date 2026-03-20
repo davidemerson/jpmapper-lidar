@@ -1,6 +1,6 @@
 # JPMapper-LiDAR
 
-A Python toolkit for LiDAR data processing and RF line-of-sight analysis. JPMapper filters LAS/LAZ point clouds, generates Digital Surface Models (DSMs), and analyzes wireless link clearance with Fresnel zone calculations.
+A Python toolkit for LiDAR data processing and RF line-of-sight analysis. JPMapper filters LAS/LAZ point clouds, generates Digital Surface Models (DSMs), and analyzes wireless link clearance with Fresnel zone calculations. Includes a web UI for interactive map-based analysis.
 
 ## Features
 
@@ -10,6 +10,7 @@ A Python toolkit for LiDAR data processing and RF line-of-sight analysis. JPMapp
 - **Mast Height Optimization** -- Iterative search finds minimum antenna height to clear obstructions
 - **Fresnel Zone Profiling** -- Terrain profiles with first Fresnel zone radius at each sample point
 - **Automatic Unit Normalization** -- DSM elevations and distances are converted to meters regardless of the CRS native unit (US survey feet, international feet, etc.)
+- **Web Interface** -- Interactive Leaflet map with point placement, terrain profile charting, and snap-to-DSM visualization
 - **CLI & Python API** -- Full command-line interface and importable Python API
 - **Auto-Optimization** -- Memory-aware worker scaling via psutil
 
@@ -21,6 +22,17 @@ A Python toolkit for LiDAR data processing and RF line-of-sight analysis. JPMapp
 4. **Report** results including clearance/obstruction status, minimum mast height needed, surface elevations, and Fresnel zone obstruction percentage
 
 The LOS engine uses the DSM (first-return surface model, which includes buildings and vegetation) rather than a DTM (bare earth), so obstructions like rooftops and tree canopy are accounted for.
+
+### DSM Snap Behavior
+
+When a selected point falls in a nodata gap in the DSM (areas without LiDAR coverage), the analysis engine snaps to the nearest valid DSM pixel within a search radius. The web UI searches up to 200 pixels; the CLI and Python API default to 50 pixels.
+
+When a snap occurs, the web UI shows:
+- An orange dashed line from the original click to the snapped location
+- An orange marker at the snapped position with the snap distance
+- A yellow notice banner in the results panel
+
+This makes it clear that the measurement was taken at the snapped location, not exactly where you clicked.
 
 ### Unit Handling
 
@@ -61,7 +73,53 @@ pip install psutil
 
 # Interactive maps
 pip install folium
+
+# Enhanced analysis map rendering
+pip install geopandas contextily
 ```
+
+## Web Interface
+
+JPMapper includes a browser-based UI for interactive line-of-sight analysis. It requires a pre-built DSM GeoTIFF.
+
+### Running the web server
+
+```bash
+jpmapper web --dsm path/to/dsm.tif
+```
+
+Options:
+- `--dsm` (required) -- Path to the DSM GeoTIFF file
+- `--host` -- Bind address (default: `127.0.0.1`)
+- `--port` -- Port number (default: `8000`)
+
+Open `http://127.0.0.1:8000` in a browser after startup.
+
+### Using the web UI
+
+1. The map loads centered on the DSM coverage area (shown as a dashed blue rectangle)
+2. Click the map to place **Point A** (blue marker), click again for **Point B** (red marker). Markers are draggable. You can also type coordinates directly into the sidebar.
+3. Set mast heights and frequency in the sidebar
+4. Click **Analyze** to run the LOS check
+
+Results include:
+- **CLEAR / BLOCKED** status badge
+- Distance, minimum clearance, surface elevations at each endpoint, and obstruction count
+- A green (clear) or red dashed (blocked) line on the map between the two points
+- Red circle markers at obstruction locations with severity popups
+- A terrain profile chart below the map showing terrain elevation, LOS line, 60% Fresnel zone bounds, and obstruction points
+
+If either point snaps to a nearby DSM pixel (because the clicked location had no data), the snap is shown visually on the map and noted in the results panel.
+
+### API endpoints
+
+The web server exposes a JSON API:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Server status and DSM load state |
+| `/api/bounds` | GET | DSM geographic bounds in WGS84 |
+| `/api/analyze` | POST | Run LOS analysis between two points |
 
 ## CLI Usage
 
@@ -106,6 +164,8 @@ jpmapper debug-dsm dsm.tif '980500,190500'
 jpmapper debug-dsm dsm.tif '980100,190500;980500,190500;980900,190500'
 ```
 
+Reports DSM metadata (shape, bounds, CRS, nodata percentage), whether each coordinate is in bounds, its pixel location, and the sampled elevation.
+
 ## Python API
 
 ### Filtering
@@ -148,6 +208,7 @@ print(f"Mast needed: {result['mast_height_m']}m")
 print(f"Surface A: {result['surface_height_a_m']}m")
 print(f"Surface B: {result['surface_height_b_m']}m")
 print(f"Distance: {result['distance_m']:.1f}m")
+print(f"Snap distance: {result['snap_distance_m']:.1f}m")
 ```
 
 Surface heights and distances are always returned in meters, even when the underlying DSM uses feet (e.g. EPSG:6539). The conversion is handled internally.
@@ -221,8 +282,16 @@ jpmapper/
     enhanced_raster.py   # rasterize_tile_with_metadata()
     analysis.py          # analyze_los(), generate_profile()
     shapefile_filter.py  # Shapefile-based spatial filtering
+  web/                   # Web interface
+    app.py               # FastAPI application, DSM lifespan management, static files
+    routes.py            # API route handlers (/health, /bounds, /analyze)
+    models.py            # Pydantic request/response models
+    static/
+      index.html         # Leaflet map + sidebar UI
+      app.js             # Map interaction, analysis requests, Chart.js profile rendering
+      style.css           # Layout and styling
   cli/                   # Typer CLI commands
-    main.py              # Root CLI app, sub-command registration, debug-dsm
+    main.py              # Root CLI app, sub-command registration, web server, debug-dsm
     filter.py            # jpmapper filter bbox|shapefile
     rasterize.py         # jpmapper rasterize tile
     analyze.py           # jpmapper analyze csv
@@ -232,36 +301,36 @@ jpmapper/
   logging.py             # Rich logging setup
 ```
 
-**Data flow**: LAS files → IO layer (filter/rasterize/gap-fill) → Analysis (LOS/Fresnel/profile) → API (validation) → CLI (user interface)
+**Data flow**: LAS files -> IO layer (filter/rasterize/gap-fill) -> Analysis (LOS/Fresnel/profile) -> API (validation) -> CLI or Web UI
 
 ### Key algorithms
 
-**`_unit_factor()`** — Detects the CRS linear unit via pyproj and returns the conversion factor to meters. Supports metre, US survey foot, and international foot. Applied in `_snap_to_valid()`, `profile()`, and `_compute_profile_with_dataset()` so that all elevations and distances are normalized to meters before any LOS or Fresnel calculation.
+**`_unit_factor()`** -- Detects the CRS linear unit via pyproj and returns the conversion factor to meters. Supports metre, US survey foot, and international foot. Applied in `_snap_to_valid()`, `profile()`, and `_compute_profile_with_dataset()` so that all elevations and distances are normalized to meters before any LOS or Fresnel calculation.
 
-**`_snap_to_valid()`** — Snaps a WGS84 coordinate to the nearest valid (non-nodata) DSM pixel within a configurable search radius (default 50 pixels). Returns the surface elevation in meters after unit conversion. Handles sparse LiDAR rasters where the query point may fall in a gap.
+**`_snap_to_valid()`** -- Snaps a WGS84 coordinate to the nearest valid (non-nodata) DSM pixel within a configurable search radius. Returns the snapped coordinates, surface elevation in meters after unit conversion, and the horizontal snap distance. Handles sparse LiDAR rasters where the query point may fall in a gap.
 
-**`_is_clear_with_dataset()`** — Computes the LOS line between two points (ground elevation + antenna height), samples the terrain profile, then checks:
+**`_is_clear_with_dataset()`** -- Computes the LOS line between two points (ground elevation + antenna height), samples the terrain profile, then checks:
 - Geometric clearance: LOS line is above terrain at all sample points
 - Fresnel clearance: 60% of the first Fresnel zone radius is unobstructed at every point
 
-**`_fill_nodata()`** — After PDAL rasterization, fills nodata gaps using GDAL's inverse-distance-weighted interpolation (via `rasterio.fill.fillnodata`). Search distance of 100 pixels.
+**`_fill_nodata()`** -- After PDAL rasterization, fills nodata gaps using GDAL's inverse-distance-weighted interpolation (via `rasterio.fill.fillnodata`). Search distance of 100 pixels.
 
-**`_is_clear_points()`** — Iterative mast height search. Starts at 0, increases mast height at both endpoints by `step_m` until Fresnel clearance is achieved or `max_mast_height_m` is exceeded.
+**`_is_clear_points()`** -- Iterative mast height search. Uses binary search between 0 and `max_mast_height_m` to find the minimum mast height that achieves Fresnel clearance.
 
 ## Exception Hierarchy
 
 ```
 JPMapperError
-  ├── ConfigurationError
-  ├── FileFormatError
-  ├── GeoSpatialError
-  │     ├── GeometryError
-  │     ├── CRSError
-  │     └── NoDataError
-  ├── AnalysisError
-  │     └── LOSError
-  ├── RasterizationError
-  └── FilterError
+  +-- ConfigurationError
+  +-- FileFormatError
+  +-- GeoSpatialError
+  |     +-- GeometryError
+  |     +-- CRSError
+  |     +-- NoDataError
+  +-- AnalysisError
+  |     +-- LOSError
+  +-- RasterizationError
+  +-- FilterError
 ```
 
 ## Working with NYC Mesh (meshdb) Data
@@ -270,7 +339,7 @@ JPMapper includes test data derived from the [NYC Mesh](https://www.nycmesh.net/
 
 ### Data Sources
 
-- **LiDAR**: NYC 2021 Topobathymetric LiDAR (EPSG:6539, US survey feet). Tiles are 2500×2500 ft.
+- **LiDAR**: NYC 2021 Topobathymetric LiDAR (EPSG:6539, US survey feet). Tiles are 2500x2500 ft.
 - **Node locations**: Pulled from the meshdb public API at `https://db.nycmesh.net/api/v1/mapdata/nodes/` and `https://db.nycmesh.net/api/v1/mapdata/links/`
 - **Test CSV**: `tests/data/meshdb_points.csv` contains real node-to-node wireless links with coordinates and computed mast heights
 
@@ -278,7 +347,7 @@ JPMapper includes test data derived from the [NYC Mesh](https://www.nycmesh.net/
 
 The LAS files are not included in the repository (gitignored due to size). To set up local test data:
 
-1. Obtain NYC 2021 LiDAR tiles covering the Brooklyn/Manhattan area (x=982500–1012500, y=175000–210000 in EPSG:6539)
+1. Obtain NYC 2021 LiDAR tiles covering the Brooklyn/Manhattan area (x=982500-1012500, y=175000-210000 in EPSG:6539)
 2. Place `.las` files in `NYC_2021/las/`
 3. Run the analysis to rasterize and test:
 
@@ -298,6 +367,12 @@ results = analyze_csv_file(
 )
 ```
 
+Or use the web UI to explore the same DSM interactively:
+
+```bash
+jpmapper web --dsm NYC_2021/dsm_cache.tif
+```
+
 ### Computing Mast Heights from meshdb
 
 The meshdb API provides node altitude (meters above sea level). To compute effective mast heights for LOS analysis:
@@ -306,11 +381,11 @@ The meshdb API provides node altitude (meters above sea level). To compute effec
 mast_height = max(2.0, node_altitude - dsm_height_at_node + 2.0)
 ```
 
-Where `dsm_height_at_node` is the DSM surface elevation (converted to meters) at the node's coordinates. The +2.0m accounts for the antenna being above the building peak. The meshdb altitude typically matches the DSM surface closely (within ±5m for most installed nodes), since both represent the building rooftop.
+Where `dsm_height_at_node` is the DSM surface elevation (converted to meters) at the node's coordinates. The +2.0m accounts for the antenna being above the building peak. The meshdb altitude typically matches the DSM surface closely (within +/-5m for most installed nodes), since both represent the building rooftop.
 
 ### Understanding Results
 
-In dense urban environments like NYC, most LOS paths will show obstructions — this is physically correct. The DSM captures building tops, and a straight-line path between two rooftop antennas will cross taller intervening buildings. Real-world mesh links may still function due to:
+In dense urban environments like NYC, most LOS paths will show obstructions -- this is physically correct. The DSM captures building tops, and a straight-line path between two rooftop antennas will cross taller intervening buildings. Real-world mesh links may still function due to:
 
 - RF diffraction and multipath propagation
 - Higher actual antenna placement than recorded in meshdb
@@ -323,7 +398,7 @@ The analysis is conservative by design: it checks pure geometric line-of-sight p
 
 ```bash
 pip install -e ".[dev]"
-pytest                                    # Run all tests (110+)
+pytest                                    # Run all tests (141)
 pytest tests/test_los_coverage.py         # LOS analysis tests
 pytest tests/test_analysis.py             # Analysis integration tests
 pytest tests/test_raster_io.py            # Rasterization tests
@@ -331,6 +406,7 @@ pytest tests/test_las_io.py               # LAS filtering tests
 pytest tests/test_api_comprehensive.py    # API validation tests
 pytest tests/test_cli.py                  # CLI command tests
 pytest tests/test_end_to_end.py           # End-to-end workflow tests
+pytest tests/test_web.py                  # Web UI and API tests
 ```
 
 Tests use real temporary GeoTIFF fixtures with proper CRS and transforms:
@@ -341,7 +417,7 @@ Tests use real temporary GeoTIFF fixtures with proper CRS and transforms:
 | `flat_dsm_meters` | EPSG:32618 (UTM metres) | 100x100 flat raster at 10 m elevation |
 | `hill_dsm` | EPSG:6539 (US survey feet) | 100x100 raster with Gaussian hill (10-60 ft) |
 
-The feet-based fixtures verify that unit conversion works correctly — a 10 ft DSM value should produce ~3.048 m in API results. The metres fixture confirms no double-conversion occurs.
+The feet-based fixtures verify that unit conversion works correctly -- a 10 ft DSM value should produce ~3.048 m in API results. The metres fixture confirms no double-conversion occurs.
 
 Tests requiring optional dependencies (`pdal`, `geopandas`, `fiona`, `folium`, `psutil`) are automatically skipped when those packages are not installed.
 
@@ -357,10 +433,13 @@ Tests requiring optional dependencies (`pdal`, `geopandas`, `fiona`, `folium`, `
 | rich | Terminal formatting, progress bars | Yes |
 | typer | CLI framework | Yes |
 | pandas | CSV processing | Yes |
+| fastapi | Web interface API | Yes |
+| uvicorn | ASGI web server | Yes |
 | pdal (CLI or python-pdal) | Point cloud rasterization | For rasterize/analyze commands |
 | matplotlib | Profile plots, analysis maps | Optional |
 | psutil | Auto worker/memory optimization | Optional |
-| geopandas + fiona | Shapefile filtering, metadata-aware rasterization | Optional |
+| geopandas + fiona | Shapefile filtering, enhanced map rendering | Optional |
+| contextily | OpenStreetMap base layers in map plots | Optional |
 | folium | Interactive HTML maps | Optional |
 
 ## License

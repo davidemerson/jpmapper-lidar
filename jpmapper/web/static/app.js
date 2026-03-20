@@ -5,6 +5,9 @@
   // ── State ──────────────────────────────────────────────────────────────
   let map, markerA, markerB, losLine, boundsRect;
   let obstructionMarkers = [];
+  let snapMarkers = [];
+  let snapLines = [];
+  let coverageLayer = null;
   let profileChart = null;
   let clickCount = 0;
 
@@ -49,6 +52,89 @@
         }).addTo(map);
       })
       .catch(() => {});
+
+    // Fetch and render coverage gaps
+    fetchCoverage();
+
+    // Coverage toggle
+    document.getElementById("show-coverage").addEventListener("change", function () {
+      if (coverageLayer) {
+        if (this.checked) {
+          map.addLayer(coverageLayer);
+        } else {
+          map.removeLayer(coverageLayer);
+        }
+      }
+    });
+  }
+
+  function fetchCoverage() {
+    fetch("/api/coverage")
+      .then(function (r) {
+        if (!r.ok) throw new Error("Coverage fetch failed: " + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        if (!data.cells || data.cells.length === 0) return;
+
+        // Build GeoJSON FeatureCollection from coverage cells
+        var features = data.cells.map(function (c) {
+          return {
+            type: "Feature",
+            properties: { coverage_pct: c.coverage_pct },
+            geometry: {
+              type: "Polygon",
+              coordinates: [[
+                [c.min_lon, c.min_lat],
+                [c.max_lon, c.min_lat],
+                [c.max_lon, c.max_lat],
+                [c.min_lon, c.max_lat],
+                [c.min_lon, c.min_lat],
+              ]],
+            },
+          };
+        });
+
+        var geojson = { type: "FeatureCollection", features: features };
+
+        coverageLayer = L.geoJSON(geojson, {
+          style: function (feature) {
+            var pct = feature.properties.coverage_pct;
+            var opacity;
+            if (pct < 10) {
+              opacity = 0.45;
+            } else if (pct < 50) {
+              opacity = 0.3;
+            } else {
+              opacity = 0.15;
+            }
+            return {
+              color: "#dc3545",
+              weight: 0.5,
+              opacity: 0.3,
+              fillColor: "#dc3545",
+              fillOpacity: opacity,
+            };
+          },
+          onEachFeature: function (feature, layer) {
+            var pct = feature.properties.coverage_pct;
+            layer.bindPopup(
+              "<b>Coverage gap</b><br>" +
+              "Valid data: " + pct + "%<br>" +
+              (pct < 10
+                ? "No LiDAR data in this area (missing LAS tile)"
+                : "Partial LiDAR coverage")
+            );
+          },
+        });
+
+        if (document.getElementById("show-coverage").checked) {
+          coverageLayer.addTo(map);
+        }
+      })
+      .catch(function (err) {
+        console.warn("Coverage overlay failed:", err);
+      });
   }
 
   // ── Map click handler ──────────────────────────────────────────────────
@@ -160,6 +246,7 @@
     $results.classList.add("hidden");
     $chartContainer.classList.add("hidden");
     $error.classList.add("hidden");
+    document.getElementById("snap-notice").classList.add("hidden");
     $btnAnalyze.disabled = true;
     clickCount = 0;
   }
@@ -168,6 +255,10 @@
     if (losLine) { map.removeLayer(losLine); losLine = null; }
     obstructionMarkers.forEach((m) => map.removeLayer(m));
     obstructionMarkers = [];
+    snapMarkers.forEach((m) => map.removeLayer(m));
+    snapMarkers = [];
+    snapLines.forEach((l) => map.removeLayer(l));
+    snapLines = [];
   }
 
   // ── Analysis ───────────────────────────────────────────────────────────
@@ -197,6 +288,7 @@
       }
       const data = await res.json();
       updateResults(data);
+      updateSnapNotice(data);
       updateMapLink(data, body);
       renderProfile(data);
     } catch (err) {
@@ -229,13 +321,16 @@
   function updateMapLink(data, body) {
     clearMapOverlays();
     const color = data.clear ? "#28a745" : "#dc3545";
-    losLine = L.polyline(
-      [
-        [body.point_a.lat, body.point_a.lon],
-        [body.point_b.lat, body.point_b.lon],
-      ],
-      { color: color, weight: 3, dashArray: data.clear ? null : "8,6" }
-    ).addTo(map);
+    // Use snapped coordinates for LOS line when a snap occurred
+    const losA = data.snap_a
+      ? [data.snap_a.snapped_lat, data.snap_a.snapped_lon]
+      : [body.point_a.lat, body.point_a.lon];
+    const losB = data.snap_b
+      ? [data.snap_b.snapped_lat, data.snap_b.snapped_lon]
+      : [body.point_b.lat, body.point_b.lon];
+    losLine = L.polyline([losA, losB], {
+      color: color, weight: 3, dashArray: data.clear ? null : "8,6",
+    }).addTo(map);
 
     data.obstructions.forEach((o) => {
       const m = L.circleMarker([o.lat, o.lon], {
@@ -250,6 +345,49 @@
         );
       obstructionMarkers.push(m);
     });
+
+    // Snap indicators
+    [data.snap_a, data.snap_b].forEach((snap, idx) => {
+      if (!snap) return;
+      const label = idx === 0 ? "A" : "B";
+      // Dashed line from original to snapped position
+      const line = L.polyline(
+        [[snap.original_lat, snap.original_lon], [snap.snapped_lat, snap.snapped_lon]],
+        { color: "#e67e22", weight: 2, dashArray: "4,4", opacity: 0.8 }
+      ).addTo(map);
+      snapLines.push(line);
+      // Diamond marker at snapped position
+      const marker = L.circleMarker([snap.snapped_lat, snap.snapped_lon], {
+        radius: 7,
+        color: "#e67e22",
+        fillColor: "#f39c12",
+        fillOpacity: 0.9,
+        weight: 2,
+      })
+        .addTo(map)
+        .bindPopup(
+          `<b>Point ${label} snapped</b><br>` +
+          `Moved ${snap.snap_distance_m} m to nearest valid DSM data`
+        );
+      snapMarkers.push(marker);
+    });
+  }
+
+  function updateSnapNotice(data) {
+    const $snap = document.getElementById("snap-notice");
+    const parts = [];
+    if (data.snap_a) {
+      parts.push(`<strong>Point A</strong> snapped ${data.snap_a.snap_distance_m} m`);
+    }
+    if (data.snap_b) {
+      parts.push(`<strong>Point B</strong> snapped ${data.snap_b.snap_distance_m} m`);
+    }
+    if (parts.length > 0) {
+      $snap.innerHTML = "Snapped to nearest DSM data: " + parts.join(", ");
+      $snap.classList.remove("hidden");
+    } else {
+      $snap.classList.add("hidden");
+    }
   }
 
   // ── Profile chart ──────────────────────────────────────────────────────

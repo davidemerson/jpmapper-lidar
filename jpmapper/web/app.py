@@ -8,8 +8,9 @@ from pathlib import Path
 import rasterio
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
+import jpmapper.web.routes as _routes
 from jpmapper.web.routes import router
 
 # Global DSM dataset handle — opened once at startup, closed on shutdown.
@@ -25,6 +26,12 @@ async def lifespan(app: FastAPI):
             "DSM path not configured. Set JPMAPPER_DSM_PATH env var or use 'jpmapper web --dsm <path>'"
         )
     dsm_dataset = rasterio.open(dsm_path)
+    _routes._coverage_cache = None
+    # Pre-compute coverage grid so first request is fast
+    try:
+        _routes._compute_coverage(dsm_dataset)
+    except Exception:
+        pass  # Will be computed lazily on first request
     yield
     if dsm_dataset is not None:
         dsm_dataset.close()
@@ -46,3 +53,8 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 @app.get("/", include_in_schema=False)
 async def index():
     return FileResponse(str(_static_dir / "index.html"))
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
