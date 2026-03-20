@@ -56,6 +56,20 @@ app.add_typer(_lazy("jpmapper.cli.filter").app, name="filter")
 app.add_typer(_lazy("jpmapper.cli.rasterize").app, name="rasterize")
 app.add_typer(_lazy("jpmapper.cli.analyze").app, name="analyze")
 
+
+@app.command()
+def web(
+    dsm: str = typer.Option(..., help="Path to DSM GeoTIFF file"),
+    host: str = typer.Option("127.0.0.1", help="Bind address"),
+    port: int = typer.Option(8000, help="Port number"),
+) -> None:
+    """Launch the web-based LOS analysis interface."""
+    import os
+    os.environ["JPMAPPER_DSM_PATH"] = dsm
+    import uvicorn
+    logger.info("Starting web server at http://%s:%d", host, port)
+    uvicorn.run("jpmapper.web.app:app", host=host, port=port, log_level="info")
+
 @app.command()
 def debug_dsm(
     dsm_path: str = typer.Argument(..., help="Path to DSM file"),

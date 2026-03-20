@@ -123,7 +123,8 @@ def analyze_csv(
         workers=workers,
         output_format="json",
         output_path=json_out,
-        map_output=map_png
+        map_output=map_png,
+        map_html=map_html,
     )
     
     # Generate summary table if not just returning results

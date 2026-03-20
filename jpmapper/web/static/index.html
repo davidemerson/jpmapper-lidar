@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JPMapper LOS Analyzer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="header">JPMapper LOS Analyzer <span>| Line-of-Sight Analysis</span></div>
+  <div class="main">
+    <div id="map"></div>
+    <div class="sidebar">
+      <div class="instructions" id="instructions">
+        Click on the map to place <strong>Point A</strong> (blue), then <strong>Point B</strong> (red). Drag markers to adjust.
+      </div>
+
+      <h3>Point A</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Latitude</label>
+          <input type="number" id="lat-a" step="0.000001" placeholder="40.689">
+        </div>
+        <div class="form-group">
+          <label>Longitude</label>
+          <input type="number" id="lon-a" step="0.000001" placeholder="-73.986">
+        </div>
+      </div>
+
+      <h3>Point B</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Latitude</label>
+          <input type="number" id="lat-b" step="0.000001" placeholder="40.694">
+        </div>
+        <div class="form-group">
+          <label>Longitude</label>
+          <input type="number" id="lon-b" step="0.000001" placeholder="-73.990">
+        </div>
+      </div>
+
+      <h3>Parameters</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Mast A (m)</label>
+          <input type="number" id="mast-a" value="3" min="0" step="0.5">
+        </div>
+        <div class="form-group">
+          <label>Mast B (m)</label>
+          <input type="number" id="mast-b" value="5" min="0" step="0.5">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Frequency (GHz)</label>
+        <select id="freq">
+          <option value="2.4">2.4</option>
+          <option value="5.8" selected>5.8</option>
+          <option value="11">11</option>
+          <option value="24">24</option>
+          <option value="60">60</option>
+        </select>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn-primary" id="btn-analyze" disabled>Analyze</button>
+        <button class="btn-secondary" id="btn-clear">Clear</button>
+      </div>
+
+      <div class="loading hidden" id="loading">Analyzing...</div>
+      <div class="error-msg hidden" id="error"></div>
+
+      <div class="results hidden" id="results">
+        <div id="status-badge"></div>
+        <div class="stat-grid">
+          <div class="stat"><div class="stat-label">Distance</div><div class="stat-value" id="r-distance">—</div></div>
+          <div class="stat"><div class="stat-label">Min Clearance</div><div class="stat-value" id="r-clearance">—</div></div>
+          <div class="stat"><div class="stat-label">Surface A</div><div class="stat-value" id="r-surface-a">—</div></div>
+          <div class="stat"><div class="stat-label">Surface B</div><div class="stat-value" id="r-surface-b">—</div></div>
+          <div class="stat"><div class="stat-label">Obstructions</div><div class="stat-value" id="r-obstructions">—</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-container hidden" id="chart-container">
+      <canvas id="profile-chart"></canvas>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/chart.js@4.4.1/dist/chart.umd.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

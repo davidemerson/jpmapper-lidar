@@ -467,11 +467,12 @@ def analyze_csv_file(
     output_format: str = "json",
     output_path: Optional[Path] = None,
     freq_ghz: float = 5.8,
-    map_output: Optional[Path] = None
+    map_output: Optional[Path] = None,
+    map_html: Optional[Path] = None
 ) -> List[Dict[str, Any]]:
     """
     Analyze points from a CSV file for line-of-sight visibility.
-    
+
     Args:
         csv_path: Path to CSV file containing point coordinates
         las_dir: Optional directory with LAS files for on-the-fly DSM generation
@@ -483,6 +484,7 @@ def analyze_csv_file(
         output_path: Optional path to save results
         freq_ghz: Frequency in GHz for Fresnel zone calculation
         map_output: Optional path to save analysis map (PNG format)
+        map_html: Optional path to save interactive HTML map (requires folium)
         
     Returns:
         List of dictionaries with analysis results
@@ -814,7 +816,75 @@ def analyze_csv_file(
             else:
                 console.print(f"[yellow]⚠️  No valid analysis points for map rendering[/yellow]")
         
+        # Generate interactive HTML map if requested
+        if map_html and successful_count > 0:
+            try:
+                import folium
+
+                # Center map on mean of all points
+                all_lats, all_lons = [], []
+                for result in results:
+                    if result.get("error"):
+                        continue
+                    a, b = result.get("point_a", ()), result.get("point_b", ())
+                    if len(a) == 2 and len(b) == 2:
+                        all_lats.extend([a[0], b[0]])
+                        all_lons.extend([a[1], b[1]])
+
+                if all_lats:
+                    center_lat = sum(all_lats) / len(all_lats)
+                    center_lon = sum(all_lons) / len(all_lons)
+                    m = folium.Map(location=[center_lat, center_lon], zoom_start=14)
+
+                    for result in results:
+                        if result.get("error"):
+                            continue
+                        a = result.get("point_a", ())
+                        b = result.get("point_b", ())
+                        if len(a) != 2 or len(b) != 2:
+                            continue
+
+                        is_clear = result.get("clear", False)
+                        link_id = result.get("id", "?")
+                        dist = result.get("distance_m", 0)
+
+                        color = "green" if is_clear else "red"
+
+                        # Draw line between endpoints
+                        folium.PolyLine(
+                            locations=[[a[0], a[1]], [b[0], b[1]]],
+                            color=color,
+                            weight=3,
+                            opacity=0.7,
+                            popup=f"Link {link_id}: {'Clear' if is_clear else 'Blocked'} ({dist:.0f}m)",
+                        ).add_to(m)
+
+                        # Markers at endpoints
+                        folium.CircleMarker(
+                            location=[a[0], a[1]],
+                            radius=4,
+                            color=color,
+                            fill=True,
+                            fill_opacity=0.8,
+                            popup=f"Link {link_id} Point A",
+                        ).add_to(m)
+                        folium.CircleMarker(
+                            location=[b[0], b[1]],
+                            radius=4,
+                            color=color,
+                            fill=True,
+                            fill_opacity=0.8,
+                            popup=f"Link {link_id} Point B",
+                        ).add_to(m)
+
+                    m.save(str(map_html))
+                    console.print(f"[green]🗺️  Interactive HTML map saved to: {map_html}[/green]")
+            except ImportError:
+                console.print("[yellow]⚠️  folium not installed — skipping HTML map[/yellow]")
+            except Exception as e:
+                console.print(f"[red]❌ Failed to create HTML map: {e}[/red]")
+
         return results
-        
+
     except Exception as e:
         raise AnalysisError(f"Failed to analyze CSV file: {e}") from e

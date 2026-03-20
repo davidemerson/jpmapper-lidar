@@ -6,13 +6,12 @@ authors = [{ name = "Your Name" }]
 readme = "README.md"
 requires-python = ">=3.9"
 
-[tool.setuptools]
-packages = ["jpmapper"]
-package-dir = {"" = "."}
-py-modules = []
+[tool.setuptools.packages.find]
+where = ["."]
 
 [tool.setuptools.package-data]
 "*" = ["*.json", "*.yaml", "*.yml"]
+"jpmapper.web" = ["static/*.html", "static/*.js", "static/*.css"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["output", "output.tif"]
@@ -36,6 +35,8 @@ dependencies = [
     "pdal>=3.0",     # PDAL Python bindings
     # analysis / visualisation
     "folium>=0.16",  # optional but included for --map-html
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.20",
 ]
 
 [project.scripts]
